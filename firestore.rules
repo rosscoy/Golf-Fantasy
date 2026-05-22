@@ -1,0 +1,108 @@
+rules_version = '2';
+
+// ─── RC Golf Sweeps — Firestore Security Rules ────────────────────────────────
+// These rules enforce server-side what the client-side code assumes:
+//   • Users can only read/write their own picks
+//   • Nobody can save picks once a tournament is locked (enforced here, not just in the UI)
+//   • Only the admin can lock/unlock, reveal entries, set cut scores, or override tiers
+//   • The combined leaderboard (allpicks) is hidden until the admin reveals it
+//   • Activity logs can be written by anyone authenticated but only read by admin
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == 'rosscoy95@gmail.com';
+    }
+
+    // Check whether picks are locked for a given tournament
+    function isLocked(tournamentId) {
+      let lockRef = /databases/$(database)/documents/golfFantasy/$('lock__' + tournamentId);
+      return exists(lockRef) && get(lockRef).data.value.locked == true;
+    }
+
+    // Check whether the combined leaderboard has been revealed for a given tournament
+    function isRevealed(tournamentId) {
+      let revealRef = /databases/$(database)/documents/golfFantasy/$('reveal__' + tournamentId);
+      return exists(revealRef) && get(revealRef).data.value.revealed == true;
+    }
+
+    // Parse the doc ID parts (all keys use __ as a separator)
+    function part(docId, i) {
+      return docId.split('__')[i];
+    }
+
+    // ── Rules ─────────────────────────────────────────────────────────────────
+
+    match /golfFantasy/{docId} {
+
+      // Admin has full read/write access to everything — no restrictions
+      allow read, write: if isAdmin();
+
+
+      // ── Individual picks (picks__{userId}__{tournamentId}) ─────────────────
+      // Users can only read and write their own picks.
+      // Writes are blocked once the tournament is locked.
+
+      allow read: if isSignedIn()
+        && part(docId, 0) == 'picks'
+        && part(docId, 1) == request.auth.uid;
+
+      allow write: if isSignedIn()
+        && part(docId, 0) == 'picks'
+        && part(docId, 1) == request.auth.uid
+        && !isLocked(part(docId, 2));
+
+
+      // ── Combined leaderboard (allpicks__{tournamentId}) ────────────────────
+      // Written by users when they save picks (updates their own entry within the doc).
+      // Only readable by others after the admin has revealed entries.
+      // Note: the data model stores all entries in one map, so we can require
+      // authentication and lock checks but cannot prevent a determined bad actor
+      // from overwriting another user's entry without restructuring the data model.
+
+      allow read: if isSignedIn()
+        && part(docId, 0) == 'allpicks'
+        && isRevealed(part(docId, 1));
+
+      allow write: if isSignedIn()
+        && part(docId, 0) == 'allpicks'
+        && !isLocked(part(docId, 1));
+
+
+      // ── Tournament state — read-only for regular users ─────────────────────
+      // Lock, reveal, cut, autolock, tiers: users need to read these to display
+      // the correct UI state, but only admin can write them (handled by admin rule above).
+
+      allow read: if isSignedIn() && (
+        part(docId, 0) == 'lock'     ||
+        part(docId, 0) == 'reveal'   ||
+        part(docId, 0) == 'cut'      ||
+        part(docId, 0) == 'autolock' ||
+        part(docId, 0) == 'tiers'
+      );
+
+
+      // ── World rankings ─────────────────────────────────────────────────────
+      // Any signed-in user can read (needed for tier calculation).
+      // Only admin can write (handled by admin rule above).
+
+      allow read: if isSignedIn() && docId == 'worldRankings';
+
+
+      // ── Activity logs (activityLog__{userId}__{timestamp}) ─────────────────
+      // Any authenticated user can create a log entry for themselves.
+      // Only admin can read logs (handled by admin rule above).
+
+      allow create: if isSignedIn()
+        && part(docId, 0) == 'activityLog'
+        && part(docId, 1) == request.auth.uid;
+    }
+  }
+}

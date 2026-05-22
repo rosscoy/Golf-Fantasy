@@ -1,0 +1,39 @@
+{
+  "crons": [
+    {
+      "path": "/api/send-reminders",
+      "schedule": "0 7 * * *"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), payment=()"
+        },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=31536000; includeSubDomains; preload"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://site.api.espn.com https://sports.core.api.espn.com wss://*.firebaseio.com https://firebasestorage.googleapis.com; img-src 'self' data: https://a.espncdn.com https://firebasestorage.googleapis.com https://lh3.googleusercontent.com https://flagcdn.com; frame-src https://*.firebaseapp.com https://accounts.google.com; frame-ancestors 'none';"
+        }
+      ]
+    }
+  ]
+}

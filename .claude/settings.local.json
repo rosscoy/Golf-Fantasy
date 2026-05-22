@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "mcp__claude_ai_Vercel__get_project",
+      "Bash(grep -n \"^\\\\`;\")",
+      "Bash(npm run:*)",
+      "Bash(npm install:*)",
+      "Bash(npx vercel:*)",
+      "Bash(curl -s \"https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard?dates=20260402\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); evs=d.get\\('events',[]\\); print\\([e['name'] for e in evs]\\)\")",
+      "mcp__claude_ai_Vercel__deploy_to_vercel",
+      "Bash(printf \"AIzaSyCmIHisDWPqP29f3osBnc5OmXCsu7pvYM8\")",
+      "Bash(vercel env:*)",
+      "Bash(printf \"golf-majors-2aa70.firebaseapp.com\")",
+      "Bash(printf \"golf-majors-2aa70\")",
+      "Bash(printf \"golf-majors-2aa70.firebasestorage.app\")",
+      "Bash(printf \"774509795613\")",
+      "Bash(printf \"1:774509795613:web:3ec2c4beab039fa23c69f4\")",
+      "Bash(printf \"628eaef55cd7f34899f61ad5c6075100\")",
+      "Bash(npm audit:*)",
+      "Bash(npx:*)",
+      "Bash(curl -s \"https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); t=d.get\\('tournament',{}\\); print\\('tournament keys:', list\\(t.keys\\(\\)\\)[:20]\\); comps=t.get\\('competitors',[]\\); print\\('competitor count:', len\\(comps\\)\\); c=comps[0] if comps else {}; print\\('competitor keys:', list\\(c.keys\\(\\)\\)\\); print\\('status keys:', list\\(c.get\\('status',{}\\).keys\\(\\)\\)\\); print\\('status type:', c.get\\('status',{}\\).get\\('type',{}\\)\\); print\\('linescores sample:', c.get\\('linescores',[]\\)[:1]\\)\")",
+      "Bash(curl -s --max-time 15 \"https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard\")",
+      "Bash(python3 -m json.tool)",
+      "WebFetch(domain:site.api.espn.com)",
+      "WebFetch(domain:sports.core.api.espn.com)",
+      "WebSearch",
+      "WebFetch(domain:www.espn.com)",
+      "WebFetch(domain:the-odds-api.com)",
+      "WebFetch(domain:datagolf.com)",
+      "WebFetch(domain:api.the-odds-api.com)",
+      "WebFetch(domain:www.cbssports.com)",
+      "Bash(node -e \"console.log\\('node ok'\\)\")",
+      "Bash(magick --version)",
+      "Bash(inkscape --version)"
+    ]
+  }
+}
