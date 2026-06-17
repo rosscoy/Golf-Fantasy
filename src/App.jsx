@@ -2055,10 +2055,12 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
   };
 
   const saveTierOverride = async (playerId, tier) => {
-    const updated = { ...tierOverrides, [playerId]: tier };
-    // Remove if it matches the base tier (no override needed)
-    const baseRank = rankMap[playerId] || null;
-    if (tier === getTierForRank(baseRank)) delete updated[playerId];
+    const updated = { ...tierOverrides };
+    if (tier === null) {
+      delete updated[playerId];
+    } else {
+      updated[playerId] = tier;
+    }
     await store.set(tierKey, updated);
     setTierOverrides(updated);
   };
@@ -4250,7 +4252,7 @@ function TierReviewView({ players, tierOverrides, onOverride, loading }) {
                   <td style={{textAlign:"center"}}>
                     <select
                       value={tierOverrides[p.id] ?? ""}
-                      onChange={e => onOverride(p.id, e.target.value ? Number(e.target.value) : p.baseTier)}
+                      onChange={e => onOverride(p.id, e.target.value ? Number(e.target.value) : null)}
                       style={{padding:"2px 6px", border:"1px solid var(--cream-dark)", borderRadius:"2px", fontFamily:"'EB Garamond',serif", fontSize:"0.82rem", background:"var(--white)", color:"var(--text-dark)", cursor:"pointer"}}
                     >
                       <option value="">— Auto —</option>
