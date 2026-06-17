@@ -1291,6 +1291,57 @@ function Tip({ text }) {
   );
 }
 
+// ─── Update Banner ───────────────────────────────────────────────────────────
+const BUILD_ID = import.meta.env.VITE_BUILD_ID;
+
+function UpdateBanner() {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!BUILD_ID || BUILD_ID === "dev") return;
+
+    const check = async () => {
+      try {
+        const res = await fetch(`/api/version?_=${Date.now()}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.version && data.version !== BUILD_ID) setVisible(true);
+      } catch {}
+    };
+
+    check();
+    const id = setInterval(check, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!visible) return null;
+
+  return (
+    <div style={{
+      position: "sticky", top: 0, zIndex: 101, width: "100%",
+      background: "linear-gradient(90deg, #1d4ed8, #4f46e5)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      gap: "12px", padding: "8px 16px",
+    }}>
+      <span style={{ color: "#fff", fontSize: 13, fontWeight: 500 }}>
+        A new version is available
+      </span>
+      <button
+        onClick={() => window.location.reload()}
+        style={{
+          background: "rgba(255,255,255,0.2)",
+          border: "1px solid rgba(255,255,255,0.4)",
+          borderRadius: 6, color: "#fff",
+          fontSize: 12, fontWeight: 700,
+          padding: "4px 12px", cursor: "pointer",
+        }}
+      >
+        Update now
+      </button>
+    </div>
+  );
+}
+
 // ─── App Root ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [user, setUser]               = useState(null);
@@ -1348,6 +1399,7 @@ export default function App() {
   return (
     <div className="app">
       <style>{CSS}</style>
+      <UpdateBanner />
       <header className="header">
         <div onClick={() => setPage("tournaments")} style={{cursor:"pointer"}}>
           <div className="header-logo">RC Golf Sweeps</div>
