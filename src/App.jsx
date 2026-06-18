@@ -3634,6 +3634,47 @@ function CompetitionPage({ user, isAdmin }) {
           ? <div className="info-banner">No teams saved for this tournament yet. Head to the Tournaments tab, pick your 5 players and save your team!</div>
           : (
             <>
+              {myRow && (
+                <div style={{
+                  background:"rgba(201,168,76,0.06)",
+                  border:"1px solid var(--cream-dark)",
+                  borderLeft:"3px solid var(--gold)",
+                  borderRadius:"4px",
+                  padding:"1rem 1.4rem",
+                  marginBottom:"1.5rem",
+                }}>
+                  <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.72rem", letterSpacing:"0.12em", textTransform:"uppercase", color:"var(--text-light)", marginBottom:"8px"}}>
+                    Your Position
+                  </div>
+                  <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:"0.5rem"}}>
+                    <div style={{display:"flex", alignItems:"baseline", gap:"10px"}}>
+                      <span style={{fontFamily:"'Playfair Display',serif", fontSize:"1.8rem", fontWeight:700, color:"var(--gold)"}}>
+                        #{tiedRanks[myRank]}
+                      </span>
+                      <span style={{fontFamily:"'Crimson Text',serif", fontSize:"0.92rem", color:"var(--text-light)"}}>
+                        of {rows.length}
+                      </span>
+                    </div>
+                    <div style={{fontFamily:"'Playfair Display',serif", fontSize:"1.6rem", fontWeight:700, color:myRow.total<0?"#6fba58":myRow.total>0?"#e08080":"var(--gold)"}}>
+                      {formatScore(myRow.total)}
+                    </div>
+                  </div>
+                  <div style={{fontFamily:"'Crimson Text',serif", fontSize:"0.8rem", color:"var(--text-light)", marginTop:"10px", display:"flex", flexWrap:"wrap", columnGap:"12px", rowGap:"4px"}}>
+                    {myRow.picks.map(pk => {
+                      const live = players.find(p=>p.id===pk.id);
+                      const rs = applyScoreRules(live, cutScore);
+                      const sc2 = formatScoreCell(rs.actualScore, rs.fantasyScore, rs.penalised);
+                      const dotClass = !live ? "dot-grey" : (live.withdrawn||rs.penalised) ? "dot-red" : live.playStatus==="finished"?"dot-blue":live.playStatus==="not_started"||live.playStatus==="cut_wd"?"dot-grey":"dot-green";
+                      return (
+                        <span key={pk.id} style={{display:"inline-flex", alignItems:"center", whiteSpace:"nowrap"}}>
+                          <span className={`player-dot ${dotClass}`}></span>
+                          {pk.name} ({sc2.fantasy ?? formatScore(rs.actualScore)})
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {/* Nationality Battle */}
               {(() => {
                 const NAT_GROUPS = ["Ireland", "Catalonia", "England"];
