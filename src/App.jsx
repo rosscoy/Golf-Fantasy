@@ -1338,7 +1338,15 @@ function UpdateBanner() {
         A new version is available
       </span>
       <button
-        onClick={() => {
+        onClick={async () => {
+          // If a new service worker is waiting, activate it before reloading
+          if ('serviceWorker' in navigator) {
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg?.waiting) {
+              reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+              await new Promise(r => navigator.serviceWorker.addEventListener('controllerchange', r, { once: true }));
+            }
+          }
           const url = new URL(window.location.href);
           url.searchParams.set('_v', Date.now());
           window.location.replace(url.toString());
