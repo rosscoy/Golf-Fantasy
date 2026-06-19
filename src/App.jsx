@@ -82,6 +82,17 @@ async function logActivity(userId, userEmail, action, details = {}) {
   } catch {}
 }
 
+function getPlatformInfo() {
+  const ua = navigator.userAgent;
+  const mobile = /Mobi|Android|iPhone|iPad/i.test(ua);
+  let browser = "Other";
+  if (/Edg\//i.test(ua)) browser = "Edge";
+  else if (/Chrome/i.test(ua) && !/Chromium/i.test(ua)) browser = "Chrome";
+  else if (/Firefox/i.test(ua)) browser = "Firefox";
+  else if (/Safari/i.test(ua)) browser = "Safari";
+  return `${browser}/${mobile ? "Mobile" : "Desktop"}`;
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const ADMIN_EMAIL   = "rosscoy95@gmail.com";
 const MAX_PICKS     = 5;
@@ -1364,7 +1375,15 @@ export default function App() {
             method: firebaseUser.providerData?.[0]?.providerId || "unknown",
             displayName: firebaseUser.displayName || null,
           });
-          store.set(`lastlogin__${firebaseUser.uid}`, Date.now());
+          store.get(`usermeta__${firebaseUser.uid}`).then(meta => {
+            store.set(`usermeta__${firebaseUser.uid}`, {
+              ...(meta || {}),
+              lastLogin: Date.now(),
+              loginCount: ((meta || {}).loginCount || 0) + 1,
+              platform: getPlatformInfo(),
+              ...((meta || {}).registered ? {} : { registered: Date.now() }),
+            });
+          });
           if (firebaseUser.email) {
             store.get("player_emails").then(emails => {
               store.set("player_emails", { ...(emails || {}), [firebaseUser.uid]: firebaseUser.email });
@@ -2186,6 +2205,9 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
       tournamentId: tournament.id,
       tournamentName: tournament.name,
       picks: picks.map(p => p.name),
+    });
+    store.get(`usermeta__${user.uid}`).then(meta => {
+      store.set(`usermeta__${user.uid}`, { ...(meta || {}), lastPickSaved: Date.now() });
     });
   };
 
@@ -4569,8 +4591,10 @@ function ParticipantDashboard() {
   const [playerNationalities, setPlayerNationalities] = useState({});
   const [editNatUid, setEditNatUid]     = useState(null);
   const [savingNat, setSavingNat]       = useState(false);
-  const [playerLastLogins, setPlayerLastLogins] = useState({});
-  const [expectedMaps, setExpectedMaps] = useState({}); // { [tid]: { [uid]: boolean } }
+  const [userMeta, setUserMeta] = useState({});
+  const [playerFilter, setPlayerFilter] = useState("all");
+  const [playerSort, setPlayerSort] = useState("name");
+  const [expectedMaps, setExpectedMaps] = useState({});
 
   useEffect(() => {
     (async () => {
@@ -4671,15 +4695,15 @@ function ParticipantDashboard() {
       }));
 
       // Aggregate into per-player stats
-      const [emails, mobiles, nats, lastLoginsRaw] = await Promise.all([
+      const [emails, mobiles, nats, userMetaRaw] = await Promise.all([
         store.get("player_emails").then(v => v || {}),
         store.get("player_mobile").then(v => v || {}),
         store.get("player_nationality").then(v => v || {}),
-        store.getByPrefix("lastlogin__"),
+        store.getByPrefix("usermeta__"),
       ]);
-      const lastLogins = {};
-      Object.entries(lastLoginsRaw).forEach(([k, v]) => { lastLogins[k.replace("lastlogin__", "")] = v; });
-      setPlayerLastLogins(lastLogins);
+      const metaByUid = {};
+      Object.entries(userMetaRaw).forEach(([k, v]) => { metaByUid[k.replace("usermeta__", "")] = v; });
+      setUserMeta(metaByUid);
 
       // Load per-tournament paid status from paid__${tid} — the same keys used by the tournament page
       const activeTids = data
@@ -5126,7 +5150,6 @@ function ParticipantDashboard() {
         // ── Players tab ──
         statsLoading ? <div className="loading">Computing player stats…</div> : (() => {
           const now = Date.now();
-          // Tournaments currently live (started but not yet ended), excluding any the admin has hidden
           const activeTournaments = data.filter(row => {
             if (hiddenTids.has(row.tournament.id)) return false;
             const start = row.tournament.date ? new Date(row.tournament.date).getTime() : null;
@@ -5134,199 +5157,237 @@ function ParticipantDashboard() {
             return start && end && now >= start && now <= end;
           });
 
+          const enriched = playerStats.map(player => {
+            const name = playerNames[player.uid] || player.displayName;
+            const email = playerEmails[player.uid] || null;
+            const meta = userMeta[player.uid] || {};
+            const pastResults = player.results.filter(r => r.position !== null);
+            const bestFinish = pastResults.reduce((b, r) => b === null || r.position < b ? r.position : b, null);
+            const activeEntries = activeTournaments.filter(row => row.entrants.some(e => e.userId === player.uid));
+            const hasUnpaid = activeEntries.some(row => !(tournamentPaidMaps[row.tournament.id]?.[player.uid]));
+            return { ...player, name, email, meta, pastResults, bestFinish, activeEntries, hasUnpaid };
+          });
+
+          const sorted = [...enriched].sort((a, b) => {
+            switch (playerSort) {
+              case "lastlogin":  return (b.meta.lastLogin || 0) - (a.meta.lastLogin || 0);
+              case "registered": return (a.meta.registered || 9e12) - (b.meta.registered || 9e12);
+              case "logins":     return (b.meta.loginCount || 0) - (a.meta.loginCount || 0);
+              case "lastpick":   return (b.meta.lastPickSaved || 0) - (a.meta.lastPickSaved || 0);
+              default:           return (a.name || "").localeCompare(b.name || "");
+            }
+          });
+
+          const filtered = sorted.filter(p => {
+            if (playerFilter === "unpaid")   return p.hasUnpaid;
+            if (playerFilter === "active")   return p.meta.lastLogin && p.meta.lastLogin > now - 30*24*60*60*1000;
+            if (playerFilter === "inactive") return !p.meta.lastLogin || p.meta.lastLogin <= now - 30*24*60*60*1000;
+            if (playerFilter === "noentry")  return p.results.length === 0;
+            return true;
+          });
+
+          const fmtRelative = ts => {
+            if (!ts) return null;
+            const diff = now - ts;
+            const mins = Math.floor(diff / 60000);
+            const hrs  = Math.floor(diff / 3600000);
+            const days = Math.floor(diff / 86400000);
+            if (mins < 2)   return "just now";
+            if (mins < 60)  return `${mins}m ago`;
+            if (hrs  < 24)  return `${hrs}h ago`;
+            if (days < 7)   return `${days}d ago`;
+            return fmtDateTime(ts);
+          };
+
           return (
-            <div style={{display:"flex", flexDirection:"column", gap:"1rem"}}>
-              {playerStats.map(player => {
-                const name = playerNames[player.uid] || player.displayName;
-                const email = playerEmails[player.uid] || null;
-                const isEditing = editUid === player.uid;
-                const pastResults = player.results.filter(r => r.position !== null);
-                const bestFinish = pastResults.reduce((b, r) => b === null || r.position < b ? r.position : b, null);
-                // Active tournaments this player has entered
-                const activeEntries = activeTournaments.filter(row =>
-                  row.entrants.some(e => e.userId === player.uid)
-                );
-                const unpaidEntries = activeEntries.filter(row =>
-                  !(tournamentPaidMaps[row.tournament.id]?.[player.uid])
-                );
-                const hasUnpaid = unpaidEntries.length > 0;
+            <div>
+              {/* Filter / sort bar */}
+              <div style={{display:"flex", alignItems:"center", gap:"10px", flexWrap:"wrap", marginBottom:"1rem"}}>
+                <div style={{display:"flex", alignItems:"center", gap:"5px"}}>
+                  <label style={{fontFamily:"'EB Garamond',serif", fontSize:"0.74rem", textTransform:"uppercase", letterSpacing:"0.08em", color:"var(--text-light)"}}>Sort</label>
+                  <select value={playerSort} onChange={e => setPlayerSort(e.target.value)}
+                    style={{fontFamily:"'Crimson Text',serif", fontSize:"0.88rem", padding:"3px 7px", border:"1px solid var(--cream-dark)", borderRadius:"2px", background:"var(--white)", color:"var(--text-dark)", outline:"none"}}>
+                    <option value="name">Name (A–Z)</option>
+                    <option value="lastlogin">Last Login</option>
+                    <option value="registered">Registration Date</option>
+                    <option value="logins">Login Count</option>
+                    <option value="lastpick">Last Pick Saved</option>
+                  </select>
+                </div>
+                <div style={{display:"flex", alignItems:"center", gap:"5px"}}>
+                  <label style={{fontFamily:"'EB Garamond',serif", fontSize:"0.74rem", textTransform:"uppercase", letterSpacing:"0.08em", color:"var(--text-light)"}}>Filter</label>
+                  <select value={playerFilter} onChange={e => setPlayerFilter(e.target.value)}
+                    style={{fontFamily:"'Crimson Text',serif", fontSize:"0.88rem", padding:"3px 7px", border:"1px solid var(--cream-dark)", borderRadius:"2px", background:"var(--white)", color:"var(--text-dark)", outline:"none"}}>
+                    <option value="all">All players</option>
+                    <option value="unpaid">Payment outstanding</option>
+                    <option value="active">Active — last 30 days</option>
+                    <option value="inactive">Inactive — 30+ days</option>
+                    <option value="noentry">No entries yet</option>
+                  </select>
+                </div>
+                <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.8rem", color:"var(--text-light)", marginLeft:"auto"}}>
+                  {filtered.length} of {enriched.length}
+                </span>
+              </div>
 
-                return (
-                  <div key={player.uid} className="section-card" style={{
-                    border: hasUnpaid ? "2px solid #c0392b" : "1px solid var(--cream-dark)",
-                    background: hasUnpaid ? "rgba(192,57,43,0.04)" : "var(--white)",
-                  }}>
-                    <div style={{padding:"0.9rem 1.2rem", display:"flex", flexDirection:"column", gap:"0.55rem"}}>
+              {/* Player list */}
+              <div style={{background:"var(--white)", border:"1px solid var(--cream-dark)", borderRadius:"4px", overflow:"hidden"}}>
+                {filtered.length === 0 && <div className="empty">No players match this filter.</div>}
+                {filtered.map((player, idx) => {
+                  const isEditingName   = editUid === player.uid;
+                  const isEditingMobile = editMobileUid === player.uid;
+                  const isEditingNat    = editNatUid === player.uid;
+                  const nat = playerNationalities[player.uid];
+                  const natObj = nat ? NATIONALITIES.find(n => n.name === nat) : null;
+                  const mobile = playerMobiles[player.uid];
+                  return (
+                    <div key={player.uid} style={{
+                      padding:"0.6rem 0.9rem",
+                      borderBottom: idx < filtered.length - 1 ? "1px solid var(--cream-dark)" : "none",
+                      borderLeft: player.hasUnpaid ? "3px solid #c0392b" : "3px solid transparent",
+                    }}>
+                      <div style={{display:"grid", gridTemplateColumns:"1fr auto", gap:"0.4rem 0.75rem", alignItems:"start"}}>
 
-                      {/* Header row: name + unpaid alert */}
-                      <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:"0.5rem"}}>
-                        <div>
-                          {isEditing ? (
-                            <span style={{display:"flex", gap:"6px", alignItems:"center", flexWrap:"wrap"}}>
-                              <input
-                                value={editVal}
-                                onChange={e => setEditVal(e.target.value)}
-                                onKeyDown={e => { if (e.key==="Enter") saveName(player.uid); if (e.key==="Escape") setEditUid(null); }}
-                                autoFocus
-                                style={{fontFamily:"'Crimson Text',serif", fontSize:"0.95rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"3px 8px", width:"160px"}}
-                              />
-                              <button className="pick-btn on" style={{fontSize:"0.75rem", padding:"3px 10px"}} onClick={() => saveName(player.uid)} disabled={saving}>
-                                {saving ? "Saving…" : "Save"}
-                              </button>
-                              <button className="pick-btn" style={{fontSize:"0.75rem", padding:"3px 10px"}} onClick={() => setEditUid(null)} disabled={saving}>Cancel</button>
+                        {/* ── Left column ── */}
+                        <div style={{minWidth:0}}>
+
+                          {/* Name row */}
+                          <div style={{display:"flex", alignItems:"center", gap:"5px", flexWrap:"wrap", marginBottom:"1px"}}>
+                            {nat && <NatFlag nationality={nat} size={13} />}
+                            {isEditingName ? (
+                              <>
+                                <input
+                                  value={editVal} onChange={e => setEditVal(e.target.value)}
+                                  onKeyDown={e => { if (e.key==="Enter") saveName(player.uid); if (e.key==="Escape") setEditUid(null); }}
+                                  autoFocus
+                                  style={{fontFamily:"'Crimson Text',serif", fontSize:"0.92rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"1px 6px", width:"140px"}}
+                                />
+                                <button className="pick-btn on" style={{fontSize:"0.68rem", padding:"1px 7px"}} onClick={() => saveName(player.uid)} disabled={saving}>{saving?"…":"Save"}</button>
+                                <button className="pick-btn" style={{fontSize:"0.68rem", padding:"1px 7px"}} onClick={() => setEditUid(null)}>Cancel</button>
+                              </>
+                            ) : (
+                              <span style={{fontFamily:"'Crimson Text',serif", fontWeight:600, fontSize:"0.95rem"}}>{player.name}</span>
+                            )}
+                            {player.hasUnpaid && (
+                              <span style={{background:"#c0392b", color:"#fff", fontFamily:"'EB Garamond',serif", fontSize:"0.68rem", fontWeight:700, letterSpacing:"0.05em", padding:"1px 6px", borderRadius:"2px"}}>UNPAID</span>
+                            )}
+                          </div>
+
+                          {/* Email + mobile + nationality — one compact line */}
+                          <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.77rem", color:"var(--text-light)", display:"flex", flexWrap:"wrap", columnGap:"10px", rowGap:"1px", marginBottom:"2px"}}>
+                            {player.email && <span>{player.email}</span>}
+                            {isEditingMobile ? (
+                              <span style={{display:"inline-flex", gap:"4px", alignItems:"center"}}>
+                                <input type="tel" value={editMobileVal} onChange={e => setEditMobileVal(e.target.value)}
+                                  onKeyDown={e => { if (e.key==="Enter") saveMobile(player.uid); if (e.key==="Escape") setEditMobileUid(null); }}
+                                  autoFocus placeholder="+353..."
+                                  style={{fontFamily:"'EB Garamond',serif", fontSize:"0.77rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"1px 5px", width:"110px"}}
+                                />
+                                <button className="pick-btn on" style={{fontSize:"0.66rem", padding:"1px 5px"}} onClick={() => saveMobile(player.uid)} disabled={savingMobile}>{savingMobile?"…":"Save"}</button>
+                                <button className="pick-btn" style={{fontSize:"0.66rem", padding:"1px 5px"}} onClick={() => setEditMobileUid(null)}>Cancel</button>
+                              </span>
+                            ) : (
+                              <span style={{cursor:"pointer", textDecoration:"underline dotted"}} onClick={() => { setEditMobileUid(player.uid); setEditMobileVal(mobile || ""); }}>
+                                {mobile || "add mobile"}
+                              </span>
+                            )}
+                            {isEditingNat ? (
+                              <span style={{display:"inline-flex", gap:"4px", alignItems:"center"}}>
+                                <select autoFocus value={nat || ""} onChange={e => saveNationality(player.uid, e.target.value)} disabled={savingNat}
+                                  style={{fontFamily:"'Crimson Text',serif", fontSize:"0.77rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"1px 4px"}}>
+                                  <option value="">— None —</option>
+                                  {NATIONALITIES.map(n => <option key={n.name} value={n.name}>{n.flag} {n.name}</option>)}
+                                </select>
+                                <button className="pick-btn" style={{fontSize:"0.66rem", padding:"1px 5px"}} onClick={() => setEditNatUid(null)}>Cancel</button>
+                              </span>
+                            ) : (
+                              <span style={{cursor:"pointer", textDecoration:"underline dotted"}} onClick={() => setEditNatUid(player.uid)}>
+                                {natObj ? `${natObj.flag} ${nat}` : "add nationality"}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Activity meta — last login, sessions, platform, registered */}
+                          <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.76rem", color:"var(--text-light)", display:"flex", flexWrap:"wrap", columnGap:"10px", rowGap:"1px", marginBottom:"2px"}}>
+                            <span>
+                              {player.meta.lastLogin
+                                ? `Last login: ${fmtRelative(player.meta.lastLogin)}`
+                                : <em>Never logged in</em>
+                              }
                             </span>
-                          ) : (
-                            <div style={{display:"flex", alignItems:"center", gap:"8px", flexWrap:"wrap"}}>
-                              <span style={{fontFamily:"'Crimson Text',serif", fontWeight:600, fontSize:"1.05rem"}}>{name}</span>
-                              <button className="pick-btn" style={{fontSize:"0.72rem", padding:"2px 8px"}}
-                                onClick={() => { setEditUid(player.uid); setEditVal(name); }}>Edit name</button>
-                              {deletingUid === player.uid ? (
-                                <span style={{display:"flex", alignItems:"center", gap:"6px"}}>
-                                  <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.78rem", color:"#c0392b"}}>Delete this player?</span>
-                                  <button className="btn-sm warn" disabled={deleting} onClick={() => deletePlayer(player.uid)}>{deleting ? "Deleting…" : "Yes, delete"}</button>
-                                  <button className="btn-sm" disabled={deleting} onClick={() => setDeletingUid(null)}>Cancel</button>
-                                </span>
-                              ) : (
-                                <button className="pick-btn" style={{fontSize:"0.72rem", padding:"2px 8px", color:"#c0392b", borderColor:"rgba(192,57,43,0.3)"}}
-                                  onClick={() => setDeletingUid(player.uid)}>Delete</button>
-                              )}
-                            </div>
-                          )}
-                          {email && (
-                            <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.82rem", color:"var(--text-light)", marginTop:"2px"}}>{email}</div>
-                          )}
-                          <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.82rem", color:"var(--text-light)", marginTop:"2px"}}>
-                            {playerLastLogins[player.uid]
-                              ? <>Last login: {fmtDateTime(playerLastLogins[player.uid])}</>
-                              : <span style={{fontStyle:"italic"}}>Never logged in</span>
+                            {player.meta.loginCount != null && (
+                              <span>{player.meta.loginCount} {player.meta.loginCount === 1 ? "session" : "sessions"}</span>
+                            )}
+                            {player.meta.registered && (
+                              <span>Reg. {fmtDate(player.meta.registered)}</span>
+                            )}
+                            {player.meta.platform && (
+                              <span style={{opacity:0.75}}>{player.meta.platform}</span>
+                            )}
+                          </div>
+
+                          {/* Last picks saved */}
+                          <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.76rem", color:"var(--text-light)", marginBottom:"3px"}}>
+                            {player.meta.lastPickSaved
+                              ? `Last pick: ${fmtDateTime(player.meta.lastPickSaved)}`
+                              : <em>No picks saved</em>
                             }
                           </div>
-                          {/* Mobile number */}
-                          {editMobileUid === player.uid ? (
-                            <span style={{display:"flex", gap:"6px", alignItems:"center", flexWrap:"wrap", marginTop:"4px"}}>
-                              <input
-                                type="tel"
-                                value={editMobileVal}
-                                onChange={e => setEditMobileVal(e.target.value)}
-                                onKeyDown={e => { if (e.key==="Enter") saveMobile(player.uid); if (e.key==="Escape") setEditMobileUid(null); }}
-                                autoFocus
-                                placeholder="+353 87 123 4567"
-                                style={{fontFamily:"'EB Garamond',serif", fontSize:"0.88rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"3px 8px", width:"160px"}}
-                              />
-                              <button className="pick-btn on" style={{fontSize:"0.72rem", padding:"2px 8px"}} onClick={() => saveMobile(player.uid)} disabled={savingMobile}>
-                                {savingMobile ? "Saving…" : "Save"}
-                              </button>
-                              <button className="pick-btn" style={{fontSize:"0.72rem", padding:"2px 8px"}} onClick={() => setEditMobileUid(null)} disabled={savingMobile}>Cancel</button>
-                            </span>
-                          ) : (
-                            <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.82rem", color:"var(--text-light)", marginTop:"2px", display:"flex", alignItems:"center", gap:"6px"}}>
-                              {playerMobiles[player.uid]
-                                ? <span>{playerMobiles[player.uid]}</span>
-                                : <span style={{fontStyle:"italic"}}>No mobile number</span>
-                              }
-                              <button className="pick-btn" style={{fontSize:"0.68rem", padding:"1px 6px"}}
-                                onClick={() => { setEditMobileUid(player.uid); setEditMobileVal(playerMobiles[player.uid] || ""); }}>
-                                {playerMobiles[player.uid] ? "Edit" : "Add"}
-                              </button>
-                            </div>
-                          )}
 
-                          {/* Nationality */}
-                          {editNatUid === player.uid ? (
-                            <span style={{display:"flex", gap:"6px", alignItems:"center", flexWrap:"wrap", marginTop:"4px"}}>
-                              <select
-                                autoFocus
-                                value={playerNationalities[player.uid] || ""}
-                                onChange={e => saveNationality(player.uid, e.target.value)}
-                                disabled={savingNat}
-                                style={{fontFamily:"'Crimson Text',serif", fontSize:"0.88rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"3px 8px"}}
-                              >
-                                <option value="">— None —</option>
-                                {NATIONALITIES.map(n => (
-                                  <option key={n.name} value={n.name}>{n.flag} {n.name}</option>
-                                ))}
-                              </select>
-                              <button className="pick-btn" style={{fontSize:"0.72rem", padding:"2px 8px"}} onClick={() => setEditNatUid(null)} disabled={savingNat}>Cancel</button>
-                            </span>
-                          ) : (
-                            <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.82rem", color:"var(--text-light)", marginTop:"2px", display:"flex", alignItems:"center", gap:"6px"}}>
-                              {playerNationalities[player.uid]
-                                ? <span style={{display:"flex", alignItems:"center", gap:"4px"}}><NatFlag nationality={playerNationalities[player.uid]} /> {playerNationalities[player.uid]}</span>
-                                : <span style={{fontStyle:"italic"}}>No nationality set</span>
-                              }
-                              <button className="pick-btn" style={{fontSize:"0.68rem", padding:"1px 6px"}}
-                                onClick={() => setEditNatUid(player.uid)}>
-                                {playerNationalities[player.uid] ? "Edit" : "Add"}
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        {hasUnpaid && (
-                          <div style={{
-                            background:"#c0392b", color:"#fff",
-                            fontFamily:"'EB Garamond',serif", fontSize:"0.78rem", fontWeight:700,
-                            letterSpacing:"0.08em", textTransform:"uppercase",
-                            padding:"3px 10px", borderRadius:"3px",
-                          }}>
-                            ⚠ Payment outstanding
+                          {/* Tournament results */}
+                          <div style={{display:"flex", alignItems:"center", gap:"4px", flexWrap:"wrap"}}>
+                            {player.results.length === 0
+                              ? <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.76rem", color:"var(--text-light)", fontStyle:"italic"}}>No entries</span>
+                              : <>
+                                  {player.results.map(r => <span key={r.id}>{posChip(r.position, r.name, r.date)}</span>)}
+                                  {player.bestFinish && (
+                                    <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.76rem", color:"var(--text-light)", marginLeft:"2px"}}>Best: #{player.bestFinish}</span>
+                                  )}
+                                </>
+                            }
                           </div>
-                        )}
-                      </div>
 
-                      {/* Results row */}
-                      <div style={{display:"flex", alignItems:"center", gap:"1rem", flexWrap:"wrap"}}>
-                        <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.78rem", letterSpacing:"0.08em", textTransform:"uppercase", color:"var(--text-light)"}}>
-                          Results
-                        </span>
-                        <div style={{display:"flex", gap:"4px", flexWrap:"wrap", alignItems:"center"}}>
-                          {player.results.length === 0
-                            ? <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.82rem", color:"var(--text-light)", fontStyle:"italic"}}>No entries yet</span>
-                            : player.results.map(r => <span key={r.id}>{posChip(r.position, r.name, r.date)}</span>)
-                          }
+                          {/* Active tournament payment */}
+                          {player.activeEntries.length > 0 && (
+                            <div style={{display:"flex", flexWrap:"wrap", gap:"4px", alignItems:"center", marginTop:"4px", paddingTop:"4px", borderTop:"1px solid var(--cream-dark)"}}>
+                              {player.activeEntries.map(row => {
+                                const paid = !!(tournamentPaidMaps[row.tournament.id]?.[player.uid]);
+                                return (
+                                  <span key={row.tournament.id} style={{display:"inline-flex", alignItems:"center", gap:"4px"}}>
+                                    <span style={{fontFamily:"'Crimson Text',serif", fontSize:"0.82rem", color:"var(--text-mid)"}}>{row.tournament.name}</span>
+                                    <button className="btn-sm" disabled={savingPaid}
+                                      style={{background:paid?"rgba(45,90,39,0.12)":"#c0392b", color:paid?"var(--green-deep)":"#fff", border:paid?"1px solid rgba(45,90,39,0.3)":"none", fontSize:"0.69rem", padding:"1px 7px"}}
+                                      onClick={() => togglePaid(player.uid, row.tournament.id)}>
+                                      {paid ? "Paid" : "Mark paid"}
+                                    </button>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
-                        {bestFinish && (
-                          <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.82rem", color:"var(--text-light)"}}>
-                            Best: #{bestFinish}
-                          </span>
-                        )}
-                      </div>
 
-                      {/* Active tournament payment row */}
-                      {activeEntries.length > 0 && (
-                        <div style={{display:"flex", flexWrap:"wrap", gap:"6px", alignItems:"center", paddingTop:"4px", borderTop:"1px solid var(--cream-dark)"}}>
-                          <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.78rem", letterSpacing:"0.08em", textTransform:"uppercase", color:"var(--text-light)"}}>
-                            Active:
-                          </span>
-                          {activeEntries.map(row => {
-                            const paid = !!(tournamentPaidMaps[row.tournament.id]?.[player.uid]);
-                            return (
-                              <span key={row.tournament.id} style={{display:"flex", alignItems:"center", gap:"5px"}}>
-                                <span style={{fontFamily:"'Crimson Text',serif", fontSize:"0.88rem", color:"var(--text-mid)"}}>{row.tournament.name}</span>
-                                <button
-                                  className="btn-sm"
-                                  disabled={savingPaid}
-                                  style={{
-                                    background: paid ? "rgba(45,90,39,0.12)" : "#c0392b",
-                                    color: paid ? "var(--green-deep)" : "#fff",
-                                    border: paid ? "1px solid rgba(45,90,39,0.3)" : "none",
-                                    fontSize:"0.72rem", padding:"2px 8px",
-                                  }}
-                                  onClick={() => togglePaid(player.uid, row.tournament.id)}
-                                >
-                                  {paid ? "✓ Paid" : "Mark paid"}
-                                </button>
-                              </span>
-                            );
-                          })}
+                        {/* ── Right column: action buttons ── */}
+                        <div style={{display:"flex", flexDirection:"column", gap:"3px", alignItems:"flex-end", flexShrink:0}}>
+                          {!isEditingName && (
+                            <button className="pick-btn" style={{fontSize:"0.69rem", padding:"2px 8px"}}
+                              onClick={() => { setEditUid(player.uid); setEditVal(player.name); }}>Edit name</button>
+                          )}
+                          {deletingUid === player.uid ? (
+                            <span style={{display:"flex", gap:"3px"}}>
+                              <button className="btn-sm warn" disabled={deleting} style={{fontSize:"0.68rem", padding:"1px 7px"}} onClick={() => deletePlayer(player.uid)}>{deleting?"…":"Confirm"}</button>
+                              <button className="btn-sm" disabled={deleting} style={{fontSize:"0.68rem", padding:"1px 7px"}} onClick={() => setDeletingUid(null)}>Cancel</button>
+                            </span>
+                          ) : (
+                            <button className="pick-btn" style={{fontSize:"0.69rem", padding:"2px 8px", color:"#c0392b", borderColor:"rgba(192,57,43,0.3)"}}
+                              onClick={() => setDeletingUid(player.uid)}>Delete</button>
+                          )}
                         </div>
-                      )}
-
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-              {playerStats.length === 0 && <div className="empty">No players found.</div>}
+                  );
+                })}
+              </div>
             </div>
           );
         })()
