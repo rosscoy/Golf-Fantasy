@@ -34,7 +34,18 @@
       "WebFetch(domain:www.cbssports.com)",
       "Bash(node -e \"console.log\\('node ok'\\)\")",
       "Bash(magick --version)",
-      "Bash(inkscape --version)"
+      "Bash(inkscape --version)",
+      "mcp__claude_ai_Vercel__list_deployments",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "mcp__claude_ai_Vercel__web_fetch_vercel_url",
+      "PowerShell(magick *)",
+      "PowerShell(python -c \"from PIL import Image; print\\('Pillow ok'\\)\" 2>&1)",
+      "PowerShell(python \"C:\\\\Users\\\\rossc\\\\OneDrive\\\\code\\\\personal\\\\golf-fantasy\\\\gen-icons.py\")",
+      "PowerShell(gh *)",
+      "PowerShell(vercel *)",
+      "mcp__claude_ai_Vercel__search_vercel_documentation"
     ]
   }
 }
