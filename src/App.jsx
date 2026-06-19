@@ -866,6 +866,7 @@ const CSS = `
   .nav-btn { background: none; border: none; cursor: pointer; color: var(--green-pale); font-family: 'EB Garamond', serif; font-size: 0.88rem; letter-spacing: 0.06em; text-transform: uppercase; padding: 6px 12px; border-radius: 2px; transition: color 0.2s, background 0.2s; white-space: nowrap; }
   .nav-btn:hover, .nav-btn.active { color: var(--gold); background: rgba(201,168,76,0.1); }
   .nav-btn.logout:hover { color: #e88; background: rgba(220,80,80,0.08); }
+  .bottom-dock { display: none; }
   .admin-badge { background: var(--gold); color: var(--green-deep); font-family: 'EB Garamond', serif; font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 8px; border-radius: 2px; font-weight: 700; }
   .main { flex: 1; max-width: 1200px; margin: 0 auto; width: 100%; padding: 2rem; }
 
@@ -954,10 +955,44 @@ const CSS = `
     .header-nav { gap: 0.3rem; }
     .nav-btn { font-size: 0.75rem; padding: 5px 7px; letter-spacing: 0.03em; }
     .admin-badge { font-size: 0.6rem; padding: 2px 5px; }
+    /* Move main nav to bottom dock on mobile */
+    .main-nav { display: none !important; }
 
-    /* Main padding */
-    .main { padding: 0.75rem; }
+    /* Main padding — extra bottom clearance for the dock */
+    .main { padding: 0.75rem 0.75rem calc(0.75rem + 62px); }
     .app { overflow-x: hidden; }
+
+    /* Bottom dock */
+    .bottom-dock {
+      display: flex;
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      z-index: 200;
+      background: var(--green-deep);
+      border-top: 2px solid var(--gold);
+      box-shadow: 0 -4px 20px var(--shadow-deep);
+      height: 58px;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .dock-btn {
+      flex: 1;
+      background: none; border: none; cursor: pointer;
+      color: var(--green-pale);
+      font-family: 'EB Garamond', serif;
+      font-size: 0.78rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      display: flex; align-items: center; justify-content: center;
+      padding: 6px 4px;
+      transition: color 0.2s, background 0.2s;
+      border-right: 1px solid rgba(201,168,76,0.12);
+    }
+    .dock-btn:last-child { border-right: none; }
+    .dock-btn.active { color: var(--gold); background: rgba(201,168,76,0.12); }
+    .dock-btn:hover { color: var(--gold); }
+
+    /* Footer above the dock */
+    .app-footer { padding-bottom: calc(1.2rem + 62px); }
 
     /* Page titles */
     .page-title { font-size: 1.3rem; word-break: break-word; }
@@ -1439,10 +1474,10 @@ export default function App() {
           <img src="/logo.png" alt="RC Golf Sweeps" className="header-logo" />
         </div>
         <nav className="header-nav">
-          <button className={`nav-btn ${page==="tournaments"?"active":""}`} onClick={() => setPage("tournaments")}>Tournaments</button>
-          <button className={`nav-btn ${page==="competition"?"active":""}`} onClick={() => setPage("competition")}>Leaderboard</button>
-          <button className={`nav-btn ${page==="myresults"?"active":""}`} onClick={() => setPage("myresults")}>My Results</button>
-          {isAdmin && <button className={`nav-btn ${page==="dashboard"?"active":""}`} onClick={() => setPage("dashboard")}>Admin</button>}
+          <button className={`nav-btn main-nav ${page==="tournaments"?"active":""}`} onClick={() => setPage("tournaments")}>Tournaments</button>
+          <button className={`nav-btn main-nav ${page==="competition"?"active":""}`} onClick={() => setPage("competition")}>Leaderboard</button>
+          <button className={`nav-btn main-nav ${page==="myresults"?"active":""}`} onClick={() => setPage("myresults")}>My Results</button>
+          {isAdmin && <button className={`nav-btn main-nav ${page==="dashboard"?"active":""}`} onClick={() => setPage("dashboard")}>Admin</button>}
           {isAdmin && <span className="admin-badge">Admin</span>}
           <button className={`nav-btn nav-user ${page==="profile"?"active":""}`} onClick={() => setPage("profile")}
             style={{display:"flex", alignItems:"center", gap:"6px", padding:"4px 8px"}}>
@@ -1479,6 +1514,14 @@ export default function App() {
           )}
         </div>
       </main>
+      <nav className="bottom-dock">
+        <button className={`dock-btn ${page==="tournaments"?"active":""}`} onClick={() => setPage("tournaments")}>Tournaments</button>
+        <button className={`dock-btn ${page==="competition"?"active":""}`} onClick={() => setPage("competition")}>Leaderboard</button>
+        <button className={`dock-btn ${page==="myresults"?"active":""}`} onClick={() => setPage("myresults")}>My Results</button>
+        {isAdmin && (
+          <button className={`dock-btn ${page==="dashboard"?"active":""}`} onClick={() => setPage("dashboard")}>Admin</button>
+        )}
+      </nav>
       <footer className="app-footer">
         RC Golf Sweeps · Private competition ·{" "}
         <a onClick={() => setShowPrivacy(true)}>Privacy notice</a>
