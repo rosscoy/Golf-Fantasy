@@ -1364,6 +1364,7 @@ export default function App() {
             method: firebaseUser.providerData?.[0]?.providerId || "unknown",
             displayName: firebaseUser.displayName || null,
           });
+          store.set(`lastlogin__${firebaseUser.uid}`, Date.now());
           if (firebaseUser.email) {
             store.get("player_emails").then(emails => {
               store.set("player_emails", { ...(emails || {}), [firebaseUser.uid]: firebaseUser.email });
@@ -4568,6 +4569,7 @@ function ParticipantDashboard() {
   const [playerNationalities, setPlayerNationalities] = useState({});
   const [editNatUid, setEditNatUid]     = useState(null);
   const [savingNat, setSavingNat]       = useState(false);
+  const [playerLastLogins, setPlayerLastLogins] = useState({});
   const [expectedMaps, setExpectedMaps] = useState({}); // { [tid]: { [uid]: boolean } }
 
   useEffect(() => {
@@ -4669,11 +4671,15 @@ function ParticipantDashboard() {
       }));
 
       // Aggregate into per-player stats
-      const [emails, mobiles, nats] = await Promise.all([
+      const [emails, mobiles, nats, lastLoginsRaw] = await Promise.all([
         store.get("player_emails").then(v => v || {}),
         store.get("player_mobile").then(v => v || {}),
         store.get("player_nationality").then(v => v || {}),
+        store.getByPrefix("lastlogin__"),
       ]);
+      const lastLogins = {};
+      Object.entries(lastLoginsRaw).forEach(([k, v]) => { lastLogins[k.replace("lastlogin__", "")] = v; });
+      setPlayerLastLogins(lastLogins);
 
       // Load per-tournament paid status from paid__${tid} — the same keys used by the tournament page
       const activeTids = data
@@ -5189,6 +5195,12 @@ function ParticipantDashboard() {
                           {email && (
                             <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.82rem", color:"var(--text-light)", marginTop:"2px"}}>{email}</div>
                           )}
+                          <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.82rem", color:"var(--text-light)", marginTop:"2px"}}>
+                            {playerLastLogins[player.uid]
+                              ? <>Last login: {fmtDateTime(playerLastLogins[player.uid])}</>
+                              : <span style={{fontStyle:"italic"}}>Never logged in</span>
+                            }
+                          </div>
                           {/* Mobile number */}
                           {editMobileUid === player.uid ? (
                             <span style={{display:"flex", gap:"6px", alignItems:"center", flexWrap:"wrap", marginTop:"4px"}}>
