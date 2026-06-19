@@ -5229,7 +5229,7 @@ function ParticipantDashboard() {
                     <button key={value} onClick={() => setPlayerSort(value)}
                       style={{fontFamily:"'Crimson Text',serif", fontSize:"0.85rem", padding:"2px 8px",
                         border:"1px solid var(--cream-dark)", borderRadius:"2px", cursor:"pointer",
-                        background: playerSort === value ? "var(--green)" : "var(--white)",
+                        background: playerSort === value ? "var(--green-mid)" : "var(--white)",
                         color: playerSort === value ? "var(--white)" : "var(--text-dark)",
                         outline:"none"}}>
                       {label}
@@ -5248,7 +5248,7 @@ function ParticipantDashboard() {
                     <button key={value} onClick={() => setPlayerFilter(value)}
                       style={{fontFamily:"'Crimson Text',serif", fontSize:"0.85rem", padding:"2px 8px",
                         border:"1px solid var(--cream-dark)", borderRadius:"2px", cursor:"pointer",
-                        background: playerFilter === value ? "var(--green)" : "var(--white)",
+                        background: playerFilter === value ? "var(--green-mid)" : "var(--white)",
                         color: playerFilter === value ? "var(--white)" : "var(--text-dark)",
                         outline:"none"}}>
                       {label}
