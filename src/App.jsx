@@ -860,7 +860,7 @@ const CSS = `
 
   /* Header */
   .header { background: var(--green-deep); padding: 0 2rem; display: flex; align-items: center; justify-content: space-between; height: 72px; border-bottom: 3px solid var(--gold); box-shadow: 0 4px 20px var(--shadow-deep); position: sticky; top: 0; z-index: 100; }
-  .header-logo { font-family: 'Playfair Display', serif; color: var(--gold); font-size: 1.4rem; font-weight: 400; letter-spacing: 0.04em; cursor: pointer; user-select: none; }
+  .header-logo { height: 46px; width: auto; display: block; user-select: none; }
   .header-sub  { color: var(--green-pale); font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; font-family: 'EB Garamond', serif; margin-top: 2px; }
   .header-nav  { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
   .nav-btn { background: none; border: none; cursor: pointer; color: var(--green-pale); font-family: 'EB Garamond', serif; font-size: 0.88rem; letter-spacing: 0.06em; text-transform: uppercase; padding: 6px 12px; border-radius: 2px; transition: color 0.2s, background 0.2s; white-space: nowrap; }
@@ -950,7 +950,7 @@ const CSS = `
   @media (max-width: 640px) {
     /* Header */
     .header { padding: 0 1rem; height: 56px; }
-    .header-logo { font-size: 1.1rem; }
+    .header-logo { height: 36px; }
     .header-nav { gap: 0.3rem; }
     .nav-btn { font-size: 0.75rem; padding: 5px 7px; letter-spacing: 0.03em; }
     .admin-badge { font-size: 0.6rem; padding: 2px 5px; }
@@ -1422,7 +1422,7 @@ export default function App() {
       <UpdateBanner />
       <header className="header">
         <div onClick={() => setPage("tournaments")} style={{cursor:"pointer"}}>
-          <div className="header-logo">RC Golf Sweeps</div>
+          <img src="/logo.png" alt="RC Golf Sweeps" className="header-logo" />
         </div>
         <nav className="header-nav">
           <button className={`nav-btn ${page==="tournaments"?"active":""}`} onClick={() => setPage("tournaments")}>Tournaments</button>
