@@ -5204,28 +5204,44 @@ function ParticipantDashboard() {
             <div>
               {/* Filter / sort bar */}
               <div style={{display:"flex", alignItems:"center", gap:"10px", flexWrap:"wrap", marginBottom:"1rem"}}>
-                <div style={{display:"flex", alignItems:"center", gap:"5px"}}>
+                <div style={{display:"flex", alignItems:"center", gap:"5px", flexWrap:"wrap"}}>
                   <label style={{fontFamily:"'EB Garamond',serif", fontSize:"0.74rem", textTransform:"uppercase", letterSpacing:"0.08em", color:"var(--text-light)"}}>Sort</label>
-                  <select value={playerSort} onChange={e => setPlayerSort(e.target.value)}
-                    style={{fontFamily:"'Crimson Text',serif", fontSize:"0.88rem", padding:"3px 7px", border:"1px solid var(--cream-dark)", borderRadius:"2px", background:"var(--white)", color:"var(--text-dark)", outline:"none"}}>
-                    <option value="name">Name (A–Z)</option>
-                    <option value="payment">Payment (Unpaid first)</option>
-                    <option value="lastlogin">Last Login (Recent first)</option>
-                    <option value="lastpick">Last Pick Saved (Recent first)</option>
-                    <option value="registered">Registration Date</option>
-                    <option value="logins">Login Count</option>
-                  </select>
+                  {[
+                    {value:"name",       label:"Name"},
+                    {value:"payment",    label:"Payment"},
+                    {value:"lastlogin",  label:"Last Login"},
+                    {value:"lastpick",   label:"Last Pick"},
+                    {value:"registered", label:"Registered"},
+                    {value:"logins",     label:"Logins"},
+                  ].map(({value, label}) => (
+                    <button key={value} onClick={() => setPlayerSort(value)}
+                      style={{fontFamily:"'Crimson Text',serif", fontSize:"0.85rem", padding:"2px 8px",
+                        border:"1px solid var(--cream-dark)", borderRadius:"2px", cursor:"pointer",
+                        background: playerSort === value ? "var(--green)" : "var(--white)",
+                        color: playerSort === value ? "var(--white)" : "var(--text-dark)",
+                        outline:"none"}}>
+                      {label}
+                    </button>
+                  ))}
                 </div>
-                <div style={{display:"flex", alignItems:"center", gap:"5px"}}>
+                <div style={{display:"flex", alignItems:"center", gap:"5px", flexWrap:"wrap"}}>
                   <label style={{fontFamily:"'EB Garamond',serif", fontSize:"0.74rem", textTransform:"uppercase", letterSpacing:"0.08em", color:"var(--text-light)"}}>Filter</label>
-                  <select value={playerFilter} onChange={e => setPlayerFilter(e.target.value)}
-                    style={{fontFamily:"'Crimson Text',serif", fontSize:"0.88rem", padding:"3px 7px", border:"1px solid var(--cream-dark)", borderRadius:"2px", background:"var(--white)", color:"var(--text-dark)", outline:"none"}}>
-                    <option value="all">All players</option>
-                    <option value="unpaid">Payment outstanding</option>
-                    <option value="active">Active — last 30 days</option>
-                    <option value="inactive">Inactive — 30+ days</option>
-                    <option value="noentry">No entries yet</option>
-                  </select>
+                  {[
+                    {value:"all",      label:"All"},
+                    {value:"unpaid",   label:"Unpaid"},
+                    {value:"active",   label:"Active"},
+                    {value:"inactive", label:"Inactive"},
+                    {value:"noentry",  label:"No Entries"},
+                  ].map(({value, label}) => (
+                    <button key={value} onClick={() => setPlayerFilter(value)}
+                      style={{fontFamily:"'Crimson Text',serif", fontSize:"0.85rem", padding:"2px 8px",
+                        border:"1px solid var(--cream-dark)", borderRadius:"2px", cursor:"pointer",
+                        background: playerFilter === value ? "var(--green)" : "var(--white)",
+                        color: playerFilter === value ? "var(--white)" : "var(--text-dark)",
+                        outline:"none"}}>
+                      {label}
+                    </button>
+                  ))}
                 </div>
                 <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.8rem", color:"var(--text-light)", marginLeft:"auto"}}>
                   {filtered.length} of {enriched.length}
