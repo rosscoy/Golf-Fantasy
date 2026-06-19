@@ -1396,11 +1396,13 @@ export default function App() {
               ...((meta || {}).registered ? {} : { registered: Date.now() }),
             });
           });
-          if (firebaseUser.email) {
-            store.get("player_emails").then(emails => {
+        }
+        if (firebaseUser.email) {
+          store.get("player_emails").then(emails => {
+            if ((emails || {})[firebaseUser.uid] !== firebaseUser.email) {
               store.set("player_emails", { ...(emails || {}), [firebaseUser.uid]: firebaseUser.email });
-            });
-          }
+            }
+          });
         }
       }
       setUser(firebaseUser || null);
