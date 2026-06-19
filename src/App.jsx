@@ -4606,6 +4606,8 @@ function ParticipantDashboard() {
   const [userMeta, setUserMeta] = useState({});
   const [playerFilter, setPlayerFilter] = useState("all");
   const [playerSort, setPlayerSort] = useState("name");
+  const [playerSortDir, setPlayerSortDir] = useState("asc");
+  const [visibleCols, setVisibleCols] = useState(() => new Set(["email","mobile","lastlogin","payment"]));
   const [expectedMaps, setExpectedMaps] = useState({});
 
   useEffect(() => {
@@ -5180,15 +5182,18 @@ function ParticipantDashboard() {
             return { ...player, name, email, meta, pastResults, bestFinish, activeEntries, hasUnpaid };
           });
 
+          const sortMultiplier = playerSortDir === "asc" ? 1 : -1;
           const sorted = [...enriched].sort((a, b) => {
+            let diff = 0;
             switch (playerSort) {
-              case "lastlogin":  return (b.meta.lastLogin || 0) - (a.meta.lastLogin || 0);
-              case "registered": return (a.meta.registered || 9e12) - (b.meta.registered || 9e12);
-              case "logins":     return (b.meta.loginCount || 0) - (a.meta.loginCount || 0);
-              case "lastpick":   return (b.meta.lastPickSaved || 0) - (a.meta.lastPickSaved || 0);
-              case "payment":    return (b.hasUnpaid ? 1 : 0) - (a.hasUnpaid ? 1 : 0);
-              default:           return (a.name || "").localeCompare(b.name || "");
+              case "lastlogin":  diff = (b.meta.lastLogin || 0) - (a.meta.lastLogin || 0); break;
+              case "registered": diff = (a.meta.registered || 9e12) - (b.meta.registered || 9e12); break;
+              case "logins":     diff = (b.meta.loginCount || 0) - (a.meta.loginCount || 0); break;
+              case "lastpick":   diff = (b.meta.lastPickSaved || 0) - (a.meta.lastPickSaved || 0); break;
+              case "payment":    diff = (b.hasUnpaid ? 1 : 0) - (a.hasUnpaid ? 1 : 0); break;
+              default:           diff = (a.name || "").localeCompare(b.name || ""); break;
             }
+            return diff * sortMultiplier;
           });
 
           const filtered = sorted.filter(p => {
@@ -5212,41 +5217,68 @@ function ParticipantDashboard() {
             return fmtDateTime(ts);
           };
 
+          const toggleCol = col => setVisibleCols(prev => { const n = new Set(prev); n.has(col) ? n.delete(col) : n.add(col); return n; });
+          const handleColSort = (col) => {
+            if (playerSort === col) setPlayerSortDir(d => d === "asc" ? "desc" : "asc");
+            else { setPlayerSort(col); setPlayerSortDir("asc"); }
+          };
+          const SortIcon = ({ col }) => playerSort === col
+            ? <span style={{marginLeft:"3px", fontSize:"0.7em"}}>{playerSortDir === "asc" ? "▲" : "▼"}</span>
+            : <span style={{marginLeft:"3px", fontSize:"0.7em", opacity:0.25}}>▲</span>;
+          const thStyle = (col) => ({
+            padding:"6px 10px", fontFamily:"'EB Garamond',serif", fontSize:"0.72rem",
+            textTransform:"uppercase", letterSpacing:"0.07em", color:"var(--text-light)",
+            background:"var(--cream-mist, #f5f0e8)", borderBottom:"1px solid var(--cream-dark)",
+            whiteSpace:"nowrap", cursor: col ? "pointer" : "default", userSelect:"none",
+            textAlign:"left", fontWeight:400,
+          });
+          const tdStyle = { padding:"6px 10px", borderBottom:"1px solid var(--cream-dark)", verticalAlign:"middle" };
+
+          const optCols = [
+            { key:"email",      label:"Email" },
+            { key:"mobile",     label:"Mobile" },
+            { key:"nat",        label:"Nationality" },
+            { key:"lastlogin",  label:"Last Login" },
+            { key:"sessions",   label:"Sessions" },
+            { key:"registered", label:"Registered" },
+            { key:"platform",   label:"Platform" },
+            { key:"lastpick",   label:"Last Pick" },
+            { key:"results",    label:"Results" },
+            { key:"payment",    label:"Payment" },
+          ];
+
           return (
             <div>
-              {/* Filter / sort bar */}
-              <div style={{display:"flex", alignItems:"center", gap:"10px", flexWrap:"wrap", marginBottom:"1rem"}}>
-                <div style={{display:"flex", alignItems:"center", gap:"5px", flexWrap:"wrap"}}>
-                  <label style={{fontFamily:"'EB Garamond',serif", fontSize:"0.74rem", textTransform:"uppercase", letterSpacing:"0.08em", color:"var(--text-light)"}}>Sort</label>
-                  {[
-                    {value:"name",       label:"Name"},
-                    {value:"payment",    label:"Payment"},
-                    {value:"lastlogin",  label:"Last Login"},
-                    {value:"lastpick",   label:"Last Pick"},
-                    {value:"registered", label:"Registered"},
-                    {value:"logins",     label:"Logins"},
-                  ].map(({value, label}) => (
-                    <button key={value} onClick={() => setPlayerSort(value)}
-                      style={{fontFamily:"'Crimson Text',serif", fontSize:"0.85rem", padding:"2px 8px",
+              {/* Toolbar */}
+              <div style={{display:"flex", alignItems:"center", gap:"8px", flexWrap:"wrap", marginBottom:"0.75rem"}}>
+                {/* Column toggles */}
+                <div style={{display:"flex", alignItems:"center", gap:"4px", flexWrap:"wrap"}}>
+                  <label style={{fontFamily:"'EB Garamond',serif", fontSize:"0.72rem", textTransform:"uppercase", letterSpacing:"0.08em", color:"var(--text-light)", marginRight:"2px"}}>Columns</label>
+                  {optCols.map(({key, label}) => (
+                    <button key={key} onClick={() => toggleCol(key)}
+                      style={{fontFamily:"'Crimson Text',serif", fontSize:"0.82rem", padding:"2px 8px",
                         border:"1px solid var(--cream-dark)", borderRadius:"2px", cursor:"pointer",
-                        background: playerSort === value ? "var(--green-mid)" : "var(--white)",
-                        color: playerSort === value ? "var(--white)" : "var(--text-dark)",
+                        background: visibleCols.has(key) ? "var(--green-mid)" : "var(--white)",
+                        color: visibleCols.has(key) ? "var(--white)" : "var(--text-light)",
                         outline:"none"}}>
                       {label}
                     </button>
                   ))}
                 </div>
-                <div style={{display:"flex", alignItems:"center", gap:"5px", flexWrap:"wrap"}}>
-                  <label style={{fontFamily:"'EB Garamond',serif", fontSize:"0.74rem", textTransform:"uppercase", letterSpacing:"0.08em", color:"var(--text-light)"}}>Filter</label>
+              </div>
+              <div style={{display:"flex", alignItems:"center", gap:"8px", flexWrap:"wrap", marginBottom:"1rem"}}>
+                {/* Filter */}
+                <div style={{display:"flex", alignItems:"center", gap:"4px", flexWrap:"wrap"}}>
+                  <label style={{fontFamily:"'EB Garamond',serif", fontSize:"0.72rem", textTransform:"uppercase", letterSpacing:"0.08em", color:"var(--text-light)", marginRight:"2px"}}>Filter</label>
                   {[
-                    {value:"all",      label:"All"},
-                    {value:"unpaid",   label:"Unpaid"},
-                    {value:"active",   label:"Active"},
+                    {value:"all", label:"All"},
+                    {value:"unpaid", label:"Unpaid"},
+                    {value:"active", label:"Active"},
                     {value:"inactive", label:"Inactive"},
-                    {value:"noentry",  label:"No Entries"},
+                    {value:"noentry", label:"No Entries"},
                   ].map(({value, label}) => (
                     <button key={value} onClick={() => setPlayerFilter(value)}
-                      style={{fontFamily:"'Crimson Text',serif", fontSize:"0.85rem", padding:"2px 8px",
+                      style={{fontFamily:"'Crimson Text',serif", fontSize:"0.82rem", padding:"2px 8px",
                         border:"1px solid var(--cream-dark)", borderRadius:"2px", cursor:"pointer",
                         background: playerFilter === value ? "var(--green-mid)" : "var(--white)",
                         color: playerFilter === value ? "var(--white)" : "var(--text-dark)",
@@ -5260,163 +5292,194 @@ function ParticipantDashboard() {
                 </span>
               </div>
 
-              {/* Player list */}
-              <div style={{background:"var(--white)", border:"1px solid var(--cream-dark)", borderRadius:"4px", overflow:"hidden"}}>
-                {filtered.length === 0 && <div className="empty">No players match this filter.</div>}
-                {filtered.map((player, idx) => {
-                  const isEditingName   = editUid === player.uid;
-                  const isEditingMobile = editMobileUid === player.uid;
-                  const isEditingNat    = editNatUid === player.uid;
-                  const nat = playerNationalities[player.uid];
-                  const natObj = nat ? NATIONALITIES.find(n => n.name === nat) : null;
-                  const mobile = playerMobiles[player.uid];
-                  return (
-                    <div key={player.uid} style={{
-                      padding:"0.6rem 0.9rem",
-                      borderBottom: idx < filtered.length - 1 ? "1px solid var(--cream-dark)" : "none",
-                      borderLeft: player.hasUnpaid ? "3px solid #c0392b" : "3px solid transparent",
-                    }}>
-                      <div style={{display:"grid", gridTemplateColumns:"1fr auto", gap:"0.4rem 0.75rem", alignItems:"start"}}>
-
-                        {/* ── Left column ── */}
-                        <div style={{minWidth:0}}>
-
-                          {/* Name row */}
-                          <div style={{display:"flex", alignItems:"center", gap:"5px", flexWrap:"wrap", marginBottom:"1px"}}>
-                            {nat && <NatFlag nationality={nat} size={13} />}
-                            {isEditingName ? (
-                              <>
-                                <input
-                                  value={editVal} onChange={e => setEditVal(e.target.value)}
-                                  onKeyDown={e => { if (e.key==="Enter") saveName(player.uid); if (e.key==="Escape") setEditUid(null); }}
-                                  autoFocus
-                                  style={{fontFamily:"'Crimson Text',serif", fontSize:"0.92rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"1px 6px", width:"140px"}}
-                                />
-                                <button className="pick-btn on" style={{fontSize:"0.68rem", padding:"1px 7px"}} onClick={() => saveName(player.uid)} disabled={saving}>{saving?"…":"Save"}</button>
-                                <button className="pick-btn" style={{fontSize:"0.68rem", padding:"1px 7px"}} onClick={() => setEditUid(null)}>Cancel</button>
-                              </>
-                            ) : (
-                              <span style={{fontFamily:"'Crimson Text',serif", fontWeight:600, fontSize:"0.95rem"}}>{player.name}</span>
+              {/* Table */}
+              <div style={{overflowX:"auto", background:"var(--white)", border:"1px solid var(--cream-dark)", borderRadius:"4px"}}>
+                {filtered.length === 0
+                  ? <div className="empty">No players match this filter.</div>
+                  : (
+                  <table style={{width:"100%", borderCollapse:"collapse", fontSize:"0.85rem"}}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle("name")} onClick={() => handleColSort("name")}>Name <SortIcon col="name" /></th>
+                        {visibleCols.has("email")      && <th style={thStyle(null)}>Email</th>}
+                        {visibleCols.has("mobile")     && <th style={thStyle(null)}>Mobile</th>}
+                        {visibleCols.has("nat")        && <th style={thStyle(null)}>Nat</th>}
+                        {visibleCols.has("lastlogin")  && <th style={thStyle("lastlogin")} onClick={() => handleColSort("lastlogin")}>Last Login <SortIcon col="lastlogin" /></th>}
+                        {visibleCols.has("sessions")   && <th style={thStyle("logins")} onClick={() => handleColSort("logins")}>Sessions <SortIcon col="logins" /></th>}
+                        {visibleCols.has("registered") && <th style={thStyle("registered")} onClick={() => handleColSort("registered")}>Registered <SortIcon col="registered" /></th>}
+                        {visibleCols.has("platform")   && <th style={thStyle(null)}>Platform</th>}
+                        {visibleCols.has("lastpick")   && <th style={thStyle("lastpick")} onClick={() => handleColSort("lastpick")}>Last Pick <SortIcon col="lastpick" /></th>}
+                        {visibleCols.has("results")    && <th style={thStyle(null)}>Results</th>}
+                        {visibleCols.has("payment")    && <th style={thStyle("payment")} onClick={() => handleColSort("payment")}>Payment <SortIcon col="payment" /></th>}
+                        <th style={thStyle(null)}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((player) => {
+                        const isEditingName   = editUid === player.uid;
+                        const isEditingMobile = editMobileUid === player.uid;
+                        const isEditingNat    = editNatUid === player.uid;
+                        const nat    = playerNationalities[player.uid];
+                        const natObj = nat ? NATIONALITIES.find(n => n.name === nat) : null;
+                        const mobile = playerMobiles[player.uid];
+                        return (
+                          <tr key={player.uid} style={{borderLeft: player.hasUnpaid ? "3px solid #c0392b" : "3px solid transparent"}}>
+                            {/* Name */}
+                            <td style={{...tdStyle, whiteSpace:"nowrap"}}>
+                              {isEditingName ? (
+                                <span style={{display:"inline-flex", gap:"4px", alignItems:"center"}}>
+                                  <input value={editVal} onChange={e => setEditVal(e.target.value)}
+                                    onKeyDown={e => { if (e.key==="Enter") saveName(player.uid); if (e.key==="Escape") setEditUid(null); }}
+                                    autoFocus
+                                    style={{fontFamily:"'Crimson Text',serif", fontSize:"0.88rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"1px 6px", width:"130px"}} />
+                                  <button className="pick-btn on" style={{fontSize:"0.66rem", padding:"1px 6px"}} onClick={() => saveName(player.uid)} disabled={saving}>{saving?"…":"Save"}</button>
+                                  <button className="pick-btn" style={{fontSize:"0.66rem", padding:"1px 6px"}} onClick={() => setEditUid(null)}>✕</button>
+                                </span>
+                              ) : (
+                                <span style={{display:"inline-flex", alignItems:"center", gap:"5px"}}>
+                                  {nat && <NatFlag nationality={nat} size={13} />}
+                                  <span style={{fontFamily:"'Crimson Text',serif", fontWeight:600, fontSize:"0.92rem"}}>{player.name}</span>
+                                  {player.hasUnpaid && <span style={{background:"#c0392b", color:"#fff", fontFamily:"'EB Garamond',serif", fontSize:"0.65rem", fontWeight:700, letterSpacing:"0.05em", padding:"1px 5px", borderRadius:"2px"}}>UNPAID</span>}
+                                </span>
+                              )}
+                            </td>
+                            {/* Email */}
+                            {visibleCols.has("email") && (
+                              <td style={{...tdStyle, color:"var(--text-light)", fontFamily:"'EB Garamond',serif", fontSize:"0.8rem"}}>
+                                {player.email || "—"}
+                              </td>
                             )}
-                            {player.hasUnpaid && (
-                              <span style={{background:"#c0392b", color:"#fff", fontFamily:"'EB Garamond',serif", fontSize:"0.68rem", fontWeight:700, letterSpacing:"0.05em", padding:"1px 6px", borderRadius:"2px"}}>UNPAID</span>
-                            )}
-                          </div>
-
-                          {/* Email + mobile + nationality — one compact line */}
-                          <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.77rem", color:"var(--text-light)", display:"flex", flexWrap:"wrap", columnGap:"10px", rowGap:"1px", marginBottom:"2px"}}>
-                            {player.email && <span>{player.email}</span>}
-                            {isEditingMobile ? (
-                              <span style={{display:"inline-flex", gap:"4px", alignItems:"center"}}>
-                                <input type="tel" value={editMobileVal} onChange={e => setEditMobileVal(e.target.value)}
-                                  onKeyDown={e => { if (e.key==="Enter") saveMobile(player.uid); if (e.key==="Escape") setEditMobileUid(null); }}
-                                  autoFocus placeholder="+353..."
-                                  style={{fontFamily:"'EB Garamond',serif", fontSize:"0.77rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"1px 5px", width:"110px"}}
-                                />
-                                <button className="pick-btn on" style={{fontSize:"0.66rem", padding:"1px 5px"}} onClick={() => saveMobile(player.uid)} disabled={savingMobile}>{savingMobile?"…":"Save"}</button>
-                                <button className="pick-btn" style={{fontSize:"0.66rem", padding:"1px 5px"}} onClick={() => setEditMobileUid(null)}>Cancel</button>
-                              </span>
-                            ) : (
-                              <span style={{cursor:"pointer", textDecoration:"underline dotted"}} onClick={() => { setEditMobileUid(player.uid); setEditMobileVal(mobile || ""); }}>
-                                {mobile || "add mobile"}
-                              </span>
-                            )}
-                            {isEditingNat ? (
-                              <span style={{display:"inline-flex", gap:"4px", alignItems:"center"}}>
-                                <select autoFocus value={nat || ""} onChange={e => saveNationality(player.uid, e.target.value)} disabled={savingNat}
-                                  style={{fontFamily:"'Crimson Text',serif", fontSize:"0.77rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"1px 4px"}}>
-                                  <option value="">— None —</option>
-                                  {NATIONALITIES.map(n => <option key={n.name} value={n.name}>{n.flag} {n.name}</option>)}
-                                </select>
-                                <button className="pick-btn" style={{fontSize:"0.66rem", padding:"1px 5px"}} onClick={() => setEditNatUid(null)}>Cancel</button>
-                              </span>
-                            ) : (
-                              <span style={{cursor:"pointer", textDecoration:"underline dotted"}} onClick={() => setEditNatUid(player.uid)}>
-                                {natObj ? `${natObj.flag} ${nat}` : "add nationality"}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Activity meta — last login, sessions, platform, registered */}
-                          <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.76rem", color:"var(--text-light)", display:"flex", flexWrap:"wrap", columnGap:"10px", rowGap:"1px", marginBottom:"2px"}}>
-                            <span>
-                              {player.meta.lastLogin
-                                ? `Last login: ${fmtRelative(player.meta.lastLogin)}`
-                                : <em>Never logged in</em>
-                              }
-                            </span>
-                            {player.meta.loginCount != null && (
-                              <span>{player.meta.loginCount} {player.meta.loginCount === 1 ? "session" : "sessions"}</span>
-                            )}
-                            {player.meta.registered && (
-                              <span>Reg. {fmtDate(player.meta.registered)}</span>
-                            )}
-                            {player.meta.platform && (
-                              <span style={{opacity:0.75}}>{player.meta.platform}</span>
-                            )}
-                          </div>
-
-                          {/* Last picks saved */}
-                          <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.76rem", color:"var(--text-light)", marginBottom:"3px"}}>
-                            {player.meta.lastPickSaved
-                              ? `Last pick: ${fmtDateTime(player.meta.lastPickSaved)}`
-                              : <em>No picks saved</em>
-                            }
-                          </div>
-
-                          {/* Tournament results */}
-                          <div style={{display:"flex", alignItems:"center", gap:"4px", flexWrap:"wrap"}}>
-                            {player.results.length === 0
-                              ? <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.76rem", color:"var(--text-light)", fontStyle:"italic"}}>No entries</span>
-                              : <>
-                                  {player.results.map(r => <span key={r.id}>{posChip(r.position, r.name, r.date)}</span>)}
-                                  {player.bestFinish && (
-                                    <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.76rem", color:"var(--text-light)", marginLeft:"2px"}}>Best: #{player.bestFinish}</span>
-                                  )}
-                                </>
-                            }
-                          </div>
-
-                          {/* Active tournament payment */}
-                          {player.activeEntries.length > 0 && (
-                            <div style={{display:"flex", flexWrap:"wrap", gap:"4px", alignItems:"center", marginTop:"4px", paddingTop:"4px", borderTop:"1px solid var(--cream-dark)"}}>
-                              {player.activeEntries.map(row => {
-                                const paid = !!(tournamentPaidMaps[row.tournament.id]?.[player.uid]);
-                                return (
-                                  <span key={row.tournament.id} style={{display:"inline-flex", alignItems:"center", gap:"4px"}}>
-                                    <span style={{fontFamily:"'Crimson Text',serif", fontSize:"0.82rem", color:"var(--text-mid)"}}>{row.tournament.name}</span>
-                                    <button className="btn-sm" disabled={savingPaid}
-                                      style={{background:paid?"rgba(45,90,39,0.12)":"#c0392b", color:paid?"var(--green-deep)":"#fff", border:paid?"1px solid rgba(45,90,39,0.3)":"none", fontSize:"0.69rem", padding:"1px 7px"}}
-                                      onClick={() => togglePaid(player.uid, row.tournament.id)}>
-                                      {paid ? "Paid" : "Mark paid"}
-                                    </button>
+                            {/* Mobile */}
+                            {visibleCols.has("mobile") && (
+                              <td style={{...tdStyle, fontFamily:"'EB Garamond',serif", fontSize:"0.8rem", whiteSpace:"nowrap"}}>
+                                {isEditingMobile ? (
+                                  <span style={{display:"inline-flex", gap:"3px", alignItems:"center"}}>
+                                    <input type="tel" value={editMobileVal} onChange={e => setEditMobileVal(e.target.value)}
+                                      onKeyDown={e => { if (e.key==="Enter") saveMobile(player.uid); if (e.key==="Escape") setEditMobileUid(null); }}
+                                      autoFocus placeholder="+353..."
+                                      style={{fontFamily:"'EB Garamond',serif", fontSize:"0.78rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"1px 5px", width:"100px"}} />
+                                    <button className="pick-btn on" style={{fontSize:"0.64rem", padding:"1px 4px"}} onClick={() => saveMobile(player.uid)} disabled={savingMobile}>{savingMobile?"…":"✓"}</button>
+                                    <button className="pick-btn" style={{fontSize:"0.64rem", padding:"1px 4px"}} onClick={() => setEditMobileUid(null)}>✕</button>
                                   </span>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* ── Right column: action buttons ── */}
-                        <div style={{display:"flex", flexDirection:"column", gap:"3px", alignItems:"flex-end", flexShrink:0}}>
-                          {!isEditingName && (
-                            <button className="pick-btn" style={{fontSize:"0.69rem", padding:"2px 8px"}}
-                              onClick={() => { setEditUid(player.uid); setEditVal(player.name); }}>Edit name</button>
-                          )}
-                          {deletingUid === player.uid ? (
-                            <span style={{display:"flex", gap:"3px"}}>
-                              <button className="btn-sm warn" disabled={deleting} style={{fontSize:"0.68rem", padding:"1px 7px"}} onClick={() => deletePlayer(player.uid)}>{deleting?"…":"Confirm"}</button>
-                              <button className="btn-sm" disabled={deleting} style={{fontSize:"0.68rem", padding:"1px 7px"}} onClick={() => setDeletingUid(null)}>Cancel</button>
-                            </span>
-                          ) : (
-                            <button className="pick-btn" style={{fontSize:"0.69rem", padding:"2px 8px", color:"#c0392b", borderColor:"rgba(192,57,43,0.3)"}}
-                              onClick={() => setDeletingUid(player.uid)}>Delete</button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                                ) : (
+                                  <span style={{cursor:"pointer", color: mobile ? "var(--text-dark)" : "var(--text-light)", textDecoration:"underline dotted"}}
+                                    onClick={() => { setEditMobileUid(player.uid); setEditMobileVal(mobile || ""); }}>
+                                    {mobile || "add"}
+                                  </span>
+                                )}
+                              </td>
+                            )}
+                            {/* Nationality */}
+                            {visibleCols.has("nat") && (
+                              <td style={{...tdStyle, fontFamily:"'EB Garamond',serif", fontSize:"0.8rem", whiteSpace:"nowrap"}}>
+                                {isEditingNat ? (
+                                  <span style={{display:"inline-flex", gap:"3px", alignItems:"center"}}>
+                                    <select autoFocus value={nat || ""} onChange={e => saveNationality(player.uid, e.target.value)} disabled={savingNat}
+                                      style={{fontFamily:"'Crimson Text',serif", fontSize:"0.78rem", background:"var(--green-deep)", color:"var(--cream)", border:"1px solid var(--gold)", borderRadius:"2px", padding:"1px 4px"}}>
+                                      <option value="">— None —</option>
+                                      {NATIONALITIES.map(n => <option key={n.name} value={n.name}>{n.flag} {n.name}</option>)}
+                                    </select>
+                                    <button className="pick-btn" style={{fontSize:"0.64rem", padding:"1px 4px"}} onClick={() => setEditNatUid(null)}>✕</button>
+                                  </span>
+                                ) : (
+                                  <span style={{cursor:"pointer", textDecoration:"underline dotted", color: nat ? "var(--text-dark)" : "var(--text-light)"}}
+                                    onClick={() => setEditNatUid(player.uid)}>
+                                    {natObj ? `${natObj.flag} ${nat}` : "add"}
+                                  </span>
+                                )}
+                              </td>
+                            )}
+                            {/* Last Login */}
+                            {visibleCols.has("lastlogin") && (
+                              <td style={{...tdStyle, fontFamily:"'EB Garamond',serif", fontSize:"0.8rem", whiteSpace:"nowrap", color:"var(--text-light)"}}>
+                                {player.meta.lastLogin ? fmtRelative(player.meta.lastLogin) : <em>Never</em>}
+                              </td>
+                            )}
+                            {/* Sessions */}
+                            {visibleCols.has("sessions") && (
+                              <td style={{...tdStyle, fontFamily:"'EB Garamond',serif", fontSize:"0.8rem", textAlign:"center", color:"var(--text-light)"}}>
+                                {player.meta.loginCount ?? "—"}
+                              </td>
+                            )}
+                            {/* Registered */}
+                            {visibleCols.has("registered") && (
+                              <td style={{...tdStyle, fontFamily:"'EB Garamond',serif", fontSize:"0.8rem", whiteSpace:"nowrap", color:"var(--text-light)"}}>
+                                {player.meta.registered ? fmtDate(player.meta.registered) : "—"}
+                              </td>
+                            )}
+                            {/* Platform */}
+                            {visibleCols.has("platform") && (
+                              <td style={{...tdStyle, fontFamily:"'EB Garamond',serif", fontSize:"0.78rem", color:"var(--text-light)", opacity:0.8}}>
+                                {player.meta.platform || "—"}
+                              </td>
+                            )}
+                            {/* Last Pick */}
+                            {visibleCols.has("lastpick") && (
+                              <td style={{...tdStyle, fontFamily:"'EB Garamond',serif", fontSize:"0.8rem", whiteSpace:"nowrap", color:"var(--text-light)"}}>
+                                {player.meta.lastPickSaved ? fmtDateTime(player.meta.lastPickSaved) : <em>None</em>}
+                              </td>
+                            )}
+                            {/* Results */}
+                            {visibleCols.has("results") && (
+                              <td style={{...tdStyle}}>
+                                <div style={{display:"flex", gap:"3px", flexWrap:"wrap", alignItems:"center"}}>
+                                  {player.results.length === 0
+                                    ? <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.78rem", color:"var(--text-light)", fontStyle:"italic"}}>—</span>
+                                    : <>
+                                        {player.results.map(r => <span key={r.id}>{posChip(r.position, r.name, r.date)}</span>)}
+                                        {player.bestFinish && <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.75rem", color:"var(--text-light)"}}>Best #{player.bestFinish}</span>}
+                                      </>
+                                  }
+                                </div>
+                              </td>
+                            )}
+                            {/* Payment */}
+                            {visibleCols.has("payment") && (
+                              <td style={{...tdStyle}}>
+                                {player.activeEntries.length === 0
+                                  ? <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.78rem", color:"var(--text-light)"}}>—</span>
+                                  : <div style={{display:"flex", flexWrap:"wrap", gap:"4px", alignItems:"center"}}>
+                                      {player.activeEntries.map(row => {
+                                        const paid = !!(tournamentPaidMaps[row.tournament.id]?.[player.uid]);
+                                        return (
+                                          <span key={row.tournament.id} style={{display:"inline-flex", alignItems:"center", gap:"3px"}}>
+                                            <span style={{fontFamily:"'Crimson Text',serif", fontSize:"0.8rem", color:"var(--text-mid)"}}>{row.tournament.name}</span>
+                                            <button className="btn-sm" disabled={savingPaid}
+                                              style={{background:paid?"rgba(45,90,39,0.12)":"#c0392b", color:paid?"var(--green-deep)":"#fff", border:paid?"1px solid rgba(45,90,39,0.3)":"none", fontSize:"0.67rem", padding:"1px 6px"}}
+                                              onClick={() => togglePaid(player.uid, row.tournament.id)}>
+                                              {paid ? "Paid" : "Mark paid"}
+                                            </button>
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                }
+                              </td>
+                            )}
+                            {/* Actions */}
+                            <td style={{...tdStyle, whiteSpace:"nowrap"}}>
+                              <div style={{display:"flex", gap:"3px", alignItems:"center"}}>
+                                {!isEditingName && (
+                                  <button className="pick-btn" style={{fontSize:"0.67rem", padding:"2px 7px"}}
+                                    onClick={() => { setEditUid(player.uid); setEditVal(player.name); }}>Edit</button>
+                                )}
+                                {deletingUid === player.uid ? (
+                                  <>
+                                    <button className="btn-sm warn" disabled={deleting} style={{fontSize:"0.67rem", padding:"1px 6px"}} onClick={() => deletePlayer(player.uid)}>{deleting?"…":"Confirm"}</button>
+                                    <button className="btn-sm" disabled={deleting} style={{fontSize:"0.67rem", padding:"1px 6px"}} onClick={() => setDeletingUid(null)}>Cancel</button>
+                                  </>
+                                ) : (
+                                  <button className="pick-btn" style={{fontSize:"0.67rem", padding:"2px 7px", color:"#c0392b", borderColor:"rgba(192,57,43,0.3)"}}
+                                    onClick={() => setDeletingUid(player.uid)}>Delete</button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
               </div>
             </div>
           );
