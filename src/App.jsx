@@ -5174,6 +5174,7 @@ function ParticipantDashboard() {
               case "registered": return (a.meta.registered || 9e12) - (b.meta.registered || 9e12);
               case "logins":     return (b.meta.loginCount || 0) - (a.meta.loginCount || 0);
               case "lastpick":   return (b.meta.lastPickSaved || 0) - (a.meta.lastPickSaved || 0);
+              case "payment":    return (b.hasUnpaid ? 1 : 0) - (a.hasUnpaid ? 1 : 0);
               default:           return (a.name || "").localeCompare(b.name || "");
             }
           });
@@ -5208,10 +5209,11 @@ function ParticipantDashboard() {
                   <select value={playerSort} onChange={e => setPlayerSort(e.target.value)}
                     style={{fontFamily:"'Crimson Text',serif", fontSize:"0.88rem", padding:"3px 7px", border:"1px solid var(--cream-dark)", borderRadius:"2px", background:"var(--white)", color:"var(--text-dark)", outline:"none"}}>
                     <option value="name">Name (A–Z)</option>
-                    <option value="lastlogin">Last Login</option>
+                    <option value="payment">Payment (Unpaid first)</option>
+                    <option value="lastlogin">Last Login (Recent first)</option>
+                    <option value="lastpick">Last Pick Saved (Recent first)</option>
                     <option value="registered">Registration Date</option>
                     <option value="logins">Login Count</option>
-                    <option value="lastpick">Last Pick Saved</option>
                   </select>
                 </div>
                 <div style={{display:"flex", alignItems:"center", gap:"5px"}}>
