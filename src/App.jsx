@@ -1338,7 +1338,11 @@ function UpdateBanner() {
         A new version is available
       </span>
       <button
-        onClick={() => window.location.reload()}
+        onClick={() => {
+          const url = new URL(window.location.href);
+          url.searchParams.set('_v', Date.now());
+          window.location.replace(url.toString());
+        }}
         style={{
           background: "rgba(255,255,255,0.2)",
           border: "1px solid rgba(255,255,255,0.4)",
