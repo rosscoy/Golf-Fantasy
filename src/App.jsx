@@ -573,12 +573,21 @@ function parseCompetitors(competitors) {
                           statusDesc.includes("missed");
     const rounds = Array.isArray(c.linescores) ? c.linescores : [];
     // Count rounds with actual score data — ESPN often returns empty shell objects for R3/R4
-    // for players who missed the cut, so we can't rely on rounds.length alone
+    // for players who missed the cut, so we can't rely on rounds.length alone.
+    // Use value > 0 when available (e.g. 64.0 strokes = played; 0 = not played/missed cut).
     const playedRounds = rounds.filter(r =>
       (r.linescores || []).length > 0 ||
-      (r.displayValue && r.displayValue !== "-" && r.displayValue !== "0" && r.displayValue !== "E")
+      (typeof r.value === "number" ? r.value > 0 : (r.displayValue && r.displayValue !== "-" && r.displayValue !== "0" && r.displayValue !== "E"))
     ).length;
     const roundsMissedCut = cutHappened && playedRounds > 0 && playedRounds <= 2;
+
+    // R3 started: value > 0 means at least one hole played (ESPN returns 0 for not-yet-started rounds)
+    const r3Round = rounds[2];
+    const r3Active = !!(r3Round && typeof r3Round.value === "number" && r3Round.value > 0);
+    // Two-round score-to-par (R1 + R2), used for cut score estimation
+    const r1HasScore = rounds[0] && (typeof rounds[0].value === "number" ? rounds[0].value > 0 : (rounds[0].displayValue && rounds[0].displayValue !== "-" && rounds[0].displayValue !== "0"));
+    const r2HasScore = rounds[1] && (typeof rounds[1].value === "number" ? rounds[1].value > 0 : (rounds[1].displayValue && rounds[1].displayValue !== "-" && rounds[1].displayValue !== "0"));
+    const twoRoundScore = (r1HasScore && r2HasScore) ? parseScoreToNum(rounds[0].displayValue) + parseScoreToNum(rounds[1].displayValue) : null;
     const isWD = statusSaysWD;
     const isMC = !isWD && (statusSaysCut || roundsMissedCut);
 
@@ -634,6 +643,8 @@ function parseCompetitors(competitors) {
       statusSaysCut, // true only when ESPN's status field explicitly says MC — more reliable than score/round-count
       withdrawn:    isWD,
       playStatus,
+      r3Active,
+      twoRoundScore,
     };
   });
 }
@@ -744,26 +755,20 @@ async function fetchLeaderboard(eventId, eventDate) {
     }
   }
 
-  // If no cut score from API, estimate from scores of non-cut players
+  // If no cut score from API, estimate from player data.
+  // Primary: players who have started R3 definitely made the cut — the worst R1+R2 score among them is the cut line.
+  // Fallback: if R3 hasn't started yet, use the worst 2-round score among players not marked as cut/WD.
   if (best.espnCutScore === null && best.players.length > 0) {
-    // Estimate cut score from the raw API competitors data
-    // The cut score is the worst 36-hole (2-round) score among players who made the cut.
-    // We stored the raw competitors so we can sum rounds 1+2 for made-cut players.
-    const madecutPlayers = best.players.filter(p => !p.cut && !p.withdrawn);
-    // Use the parsed rawScore as a last resort — but only if it looks like a 2-round score
-    // (i.e. tournament is still in rounds 3-4, so rawScore is a running total not just R1+R2)
-    // Better: just take the highest rawScore among made-cut players that is reasonable (<= +10)
-    // since cut lines are rarely above +10
-    if (madecutPlayers.length > 0) {
-      const scores = madecutPlayers.map(p => p.rawScore);
-      const worstMadecut = Math.max(...scores);
-      // Sanity check: cut scores for PGA Tour events are typically between -10 and +6
-      // If the calculated value is unreasonably high it means we're looking at final scores not cut scores
-      // In that case don't set a cut score — admin can set it manually
-      if (worstMadecut <= 8) {
-        best.espnCutScore = worstMadecut;
+    const r3Started = best.players.filter(p => p.r3Active && p.twoRoundScore !== null);
+    if (r3Started.length > 0) {
+      const worstCut = Math.max(...r3Started.map(p => p.twoRoundScore));
+      if (worstCut >= -10 && worstCut <= 12) best.espnCutScore = worstCut;
+    } else {
+      const madeCut = best.players.filter(p => !p.cut && !p.withdrawn && p.twoRoundScore !== null);
+      if (madeCut.length > 0) {
+        const worstCut = Math.max(...madeCut.map(p => p.twoRoundScore));
+        if (worstCut >= -10 && worstCut <= 12) best.espnCutScore = worstCut;
       }
-      // else: leave as null so admin override is required
     }
   }
 
