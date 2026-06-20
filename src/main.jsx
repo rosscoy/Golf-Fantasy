@@ -28,6 +28,13 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// Poll for SW updates every 60 s so open tabs pick up new deploys without a manual reload.
+if ('serviceWorker' in navigator) {
+  setInterval(() => {
+    navigator.serviceWorker.getRegistration().then(r => r?.update()).catch(() => {});
+  }, 60_000);
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
