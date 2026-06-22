@@ -2455,7 +2455,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
       </div>
 
       {view === "entries" && (isAdmin || (locked && revealed)) && (
-        <AdminEntriesView entries={allEntries} players={displayPlayers} cutScore={cutScore} tournament={tournament} rankMap={rankMap} isAdmin={isAdmin} nationalityMap={nationalityMap} tournamentOdds={tournamentOdds} tierOverrides={tierOverrides} paidMap={paidMap} onTogglePaid={togglePaid} playerNames={playerNames} completed={completed} potOverride={potOverride} prizePositions={prizePositions} extraPaidCount={extraPaidCount} />
+        <AdminEntriesView entries={allEntries} players={displayPlayers} cutScore={cutScore} tournament={tournament} rankMap={rankMap} isAdmin={isAdmin} nationalityMap={nationalityMap} tournamentOdds={tournamentOdds} tierOverrides={tierOverrides} paidMap={paidMap} onTogglePaid={togglePaid} playerNames={playerNames} />
       )}
 
       {view === "summary" && (isAdmin || summaryRevealed) && (
@@ -3162,7 +3162,7 @@ function TierBadge({ tier, rank, compact }) {
 }
 
 // ─── Admin Entries View ───────────────────────────────────────────────────────
-function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}, isAdmin = false, nationalityMap = {}, tournamentOdds = {}, tierOverrides = {}, paidMap = {}, onTogglePaid, playerNames = {}, completed = false, potOverride = null, prizePositions = null, extraPaidCount = 0 }) {
+function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}, isAdmin = false, nationalityMap = {}, tournamentOdds = {}, tierOverrides = {}, paidMap = {}, onTogglePaid, playerNames = {} }) {
   const [sortCol, setSortCol] = useState('savedAt');
   const [sortDir, setSortDir] = useState('desc');
   const [confirmUnpaidUid, setConfirmUnpaidUid] = useState(null);
@@ -3263,28 +3263,6 @@ function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}
     rankPos = end;
   }
 
-  // Prize winnings (only when competition is marked complete)
-  let winnings = null;
-  if (completed && entries.length > 0) {
-    const entryCount = entries.length + extraPaidCount;
-    const pot = potOverride !== null ? potOverride : entryCount * ENTRY_FEE;
-    const computeAmounts = n => {
-      const s = computePrizeSplits(n);
-      return s.map((pct, i) => {
-        if (i < s.length - 1) return Math.round(pot * pct / 100);
-        const prev = s.slice(0, -1).reduce((sum, p) => sum + Math.round(pot * p / 100), 0);
-        return pot - prev;
-      });
-    };
-    let maxPos = 1;
-    for (let n = 1; n <= MAX_PRIZE_POSITIONS; n++) {
-      const a = computeAmounts(n);
-      if (a[a.length - 1] >= MIN_BOTTOM_PRIZE) maxPos = n; else break;
-    }
-    const pos = Math.min(prizePositions ?? defaultPrizePositions(entryCount), maxPos);
-    winnings = computeWinnings(byScore, computeAmounts(pos));
-  }
-
   // Display sort
   const sorted = [...withScores].sort((a, b) => {
     if (sortCol === 'displayName') {
@@ -3357,7 +3335,6 @@ function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}
               <SortTh col="tierSum" style={{textAlign:"center"}}>Tier Sum</SortTh>
               <SortTh col="savedAt" style={{textAlign:"center"}}>Saved</SortTh>
               <SortTh col="total" style={{textAlign:"right"}}>Total</SortTh>
-              {completed && <th style={{textAlign:"right", color:"var(--gold)", whiteSpace:"nowrap"}}>Prize</th>}
             </tr>
           </thead>
           <tbody>
@@ -3423,14 +3400,6 @@ function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}
                   <td className={sc(entry.total)} style={{textAlign:"right", fontWeight:700, fontFamily:"'EB Garamond',serif", fontSize:"1rem"}}>
                     {players.length > 0 ? formatScore(entry.total) : "–"}
                   </td>
-                  {completed && (() => {
-                    const won = winnings?.[entry.userId] ?? 0;
-                    return (
-                      <td style={{textAlign:"right", fontFamily:"'Playfair Display',serif", fontSize:"0.92rem", whiteSpace:"nowrap", color: won > 0 ? "var(--gold)" : "var(--text-light)", fontWeight: won > 0 ? 700 : 400}}>
-                        {won > 0 ? `€${won}` : "—"}
-                      </td>
-                    );
-                  })()}
                 </tr>
               );
             })}
