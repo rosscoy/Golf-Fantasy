@@ -1,30 +1,39 @@
-name: Deploy to Production
+name: Pin Production Alias
 
 on:
   push:
     branches: [master]
 
 jobs:
-  deploy:
+  alias:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Deploy to Vercel and assign production alias
+      - name: Wait for Vercel deployment then pin production alias
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: team_eacmJfhJqgPqg7phWGMGittC
-          VERCEL_PROJECT_ID: prj_oJ6imXwDf85UbMzzb38J7eFEswdn
+          COMMIT_SHA: ${{ github.sha }}
         run: |
-          npx vercel pull --yes --environment=production --token=$VERCEL_TOKEN
-          npx vercel build --prod --token=$VERCEL_TOKEN
-          DEPLOY_URL=$(npx vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN)
-          echo "Deployed to: $DEPLOY_URL"
-          npx vercel alias set $DEPLOY_URL rc-golf-sweeps.vercel.app --token=$VERCEL_TOKEN
+          echo "Waiting for Vercel to deploy commit $COMMIT_SHA..."
+          for i in $(seq 1 24); do
+            RESPONSE=$(curl -s \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "https://api.vercel.com/v6/deployments?teamId=team_eacmJfhJqgPqg7phWGMGittC&projectId=prj_oJ6imXwDf85UbMzzb38J7eFEswdn&limit=10")
+            DEPLOY_URL=$(echo "$RESPONSE" | jq -r \
+              ".deployments[] | select(.meta.githubCommitSha == \"$COMMIT_SHA\" and .readyState == \"READY\") | .url" \
+              | head -1)
+            if [ -n "$DEPLOY_URL" ]; then
+              echo "Deployment ready: $DEPLOY_URL"
+              curl -s -X POST \
+                "https://api.vercel.com/v2/deployments/$DEPLOY_URL/aliases" \
+                -H "Authorization: Bearer $VERCEL_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d '{"alias":"rc-golf-sweeps-rosscoy95-9546-rosscoy95-9546s-projects.vercel.app"}'
+              echo ""
+              echo "Production alias pinned successfully."
+              exit 0
+            fi
+            echo "Not ready yet, retrying in 15s... ($i/24)"
+            sleep 15
+          done
+          echo "Timed out waiting for deployment."
+          exit 1
