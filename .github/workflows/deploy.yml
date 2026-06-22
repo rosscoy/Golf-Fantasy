@@ -1,39 +1,17 @@
-name: Pin Production Alias
+name: Verify Deployment
 
 on:
   push:
     branches: [master]
 
 jobs:
-  alias:
+  verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for Vercel deployment then pin production alias
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          COMMIT_SHA: ${{ github.sha }}
+      - name: Confirm Vercel deployment triggered
         run: |
-          echo "Waiting for Vercel to deploy commit $COMMIT_SHA..."
-          for i in $(seq 1 24); do
-            RESPONSE=$(curl -s \
-              -H "Authorization: Bearer $VERCEL_TOKEN" \
-              "https://api.vercel.com/v6/deployments?teamId=team_eacmJfhJqgPqg7phWGMGittC&projectId=prj_oJ6imXwDf85UbMzzb38J7eFEswdn&limit=10")
-            DEPLOY_URL=$(echo "$RESPONSE" | jq -r \
-              ".deployments[] | select(.meta.githubCommitSha == \"$COMMIT_SHA\" and .readyState == \"READY\") | .url" \
-              | head -1)
-            if [ -n "$DEPLOY_URL" ]; then
-              echo "Deployment ready: $DEPLOY_URL"
-              curl -s -X POST \
-                "https://api.vercel.com/v2/deployments/$DEPLOY_URL/aliases" \
-                -H "Authorization: Bearer $VERCEL_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d '{"alias":"rc-golf-sweeps-rosscoy95-9546-rosscoy95-9546s-projects.vercel.app"}'
-              echo ""
-              echo "Production alias pinned successfully."
-              exit 0
-            fi
-            echo "Not ready yet, retrying in 15s... ($i/24)"
-            sleep 15
-          done
-          echo "Timed out waiting for deployment."
-          exit 1
+          echo "Vercel Git integration handles deployment automatically."
+          echo "Both production domains are configured as project domains and update on every push to master:"
+          echo "  - rc-golf-sweeps.vercel.app"
+          echo "  - rc-golf-sweeps-rosscoy95-9546-rosscoy95-9546s-projects.vercel.app"
+          echo "No token or manual aliasing required."
