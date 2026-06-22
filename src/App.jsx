@@ -3813,8 +3813,8 @@ function CompetitionPage({ user, isAdmin }) {
                   </div>
                 );
               })()}
-              <div className="comp-lb" style={winnings ? {gridTemplateColumns:"60px 1fr auto auto"} : {}}>
-                <div className="c-row hdr" style={winnings ? {gridTemplateColumns:"60px 1fr auto auto"} : {}}>
+              <div className="comp-lb" style={winnings ? {gridTemplateColumns:"60px 1fr auto auto", columnGap:"1rem"} : {}}>
+                <div className="c-row hdr" style={winnings ? {gridTemplateColumns:"60px 1fr auto auto", columnGap:"1rem"} : {}}>
                   <span>Rank</span><span>Participant</span><span>Score</span>
                   {winnings && <span style={{textAlign:"right", color:"var(--gold)"}}>Prize</span>}
                 </div>
@@ -3828,7 +3828,7 @@ function CompetitionPage({ user, isAdmin }) {
                                  : null;
                     const won = winnings?.[row.userId] ?? 0;
                     return (
-                    <div key={row.userId} className={`c-row ${row.userId===user.uid?"me":""}`} style={winnings ? {gridTemplateColumns:"60px 1fr auto auto"} : {}}>
+                    <div key={row.userId} className={`c-row ${row.userId===user.uid?"me":""}`} style={winnings ? {gridTemplateColumns:"60px 1fr auto auto", columnGap:"1rem"} : {}}>
                       <div className="c-rank">{tiedRanks[i] <= prizeCount ? `#${tiedRanks[i]}` : ""}{arrow}</div>
                       <div className="c-user">
                         {nationalityMap[row.userId] && <span style={{marginRight:"6px"}}><NatFlag nationality={nationalityMap[row.userId]} /></span>}
