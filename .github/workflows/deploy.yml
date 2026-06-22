@@ -1,17 +1,50 @@
-name: Verify Deployment
+name: Alias production URL
 
 on:
   push:
     branches: [master]
 
 jobs:
-  verify:
+  alias:
     runs-on: ubuntu-latest
     steps:
-      - name: Confirm Vercel deployment triggered
+      - name: Wait for Vercel deployment then alias to rc-golf-sweeps.vercel.app
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+          TEAM_ID: team_eacmJfhJqgPqg7phWGMGittC
         run: |
-          echo "Vercel Git integration handles deployment automatically."
-          echo "Both production domains are configured as project domains and update on every push to master:"
-          echo "  - rc-golf-sweeps.vercel.app"
-          echo "  - rc-golf-sweeps-rosscoy95-9546-rosscoy95-9546s-projects.vercel.app"
-          echo "No token or manual aliasing required."
+          echo "Looking for deployment of commit $COMMIT_SHA..."
+          DEPLOYMENT_URL=""
+
+          for i in $(seq 1 30); do
+            RESPONSE=$(curl -s \
+              "https://api.vercel.com/v6/deployments?teamId=$TEAM_ID&meta-githubCommitSha=$COMMIT_SHA&limit=5" \
+              -H "Authorization: Bearer $VERCEL_TOKEN")
+
+            DEPLOYMENT_URL=$(echo "$RESPONSE" | jq -r \
+              '.deployments[] | select(.state=="READY") | .url' | head -1)
+
+            if [ -n "$DEPLOYMENT_URL" ]; then
+              echo "Deployment ready: https://$DEPLOYMENT_URL"
+              break
+            fi
+
+            STATE=$(echo "$RESPONSE" | jq -r '.deployments[0].state // "not found"')
+            echo "Attempt $i: state=$STATE — waiting 10s..."
+            sleep 10
+          done
+
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            echo "ERROR: No READY deployment found for $COMMIT_SHA after 5 minutes."
+            exit 1
+          fi
+
+          echo "Aliasing https://$DEPLOYMENT_URL → rc-golf-sweeps.vercel.app ..."
+          curl -sf -X POST \
+            "https://api.vercel.com/v2/deployments/$DEPLOYMENT_URL/aliases?teamId=$TEAM_ID" \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"alias":"rc-golf-sweeps.vercel.app"}' | jq .
+
+          echo "Done."
