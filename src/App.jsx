@@ -123,6 +123,37 @@ function computePrizeSplits(n) {
   return [40, ...otherPcts];
 }
 const defaultPrizePositions = n => n < 6 ? 2 : n < 11 ? 3 : n < 16 ? 4 : n < 21 ? 5 : Math.min(6 + Math.floor((n - 21) / 5), MAX_PRIZE_POSITIONS);
+
+// Returns { userId: amountWon } for a completed competition.
+// Entries in byScore must be sorted by total ascending (best score first), with name as tiebreaker.
+// Tied players share the combined prize money for the positions they jointly occupy.
+function computeWinnings(byScore, prizeAmounts) {
+  const result = {};
+  let pos = 0;
+  while (pos < byScore.length) {
+    const score = byScore[pos].total;
+    let end = pos;
+    while (end < byScore.length && byScore[end].total === score) end++;
+    const groupSize = end - pos;
+    const slots = [];
+    for (let k = pos; k < end; k++) {
+      if (k < prizeAmounts.length) slots.push(k);
+    }
+    if (slots.length > 0) {
+      const pool = slots.reduce((s, k) => s + prizeAmounts[k], 0);
+      const base = Math.floor(pool / groupSize);
+      const remainder = pool - base * groupSize;
+      for (let k = pos; k < end; k++) {
+        result[byScore[k].userId] = base + (k - pos < remainder ? 1 : 0);
+      }
+    } else {
+      for (let k = pos; k < end; k++) result[byScore[k].userId] = 0;
+    }
+    pos = end;
+  }
+  return result;
+}
+
 const MAJORS        = ["masters", "u.s. open", "us open", "the open championship", "the open", "pga championship", "masters tournament"];
 
 // ─── Tier System ─────────────────────────────────────────────────────────────
@@ -1886,6 +1917,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
   const [paidMap, setPaidMap]                       = useState({});   // { [uid]: boolean } per tournament
   const [summaryRevealed, setSummaryRevealed]       = useState(false);
   const [prizeRevealed, setPrizeRevealed]           = useState(false);
+  const [completed, setCompleted]                   = useState(false);
   const [playerNames, setPlayerNames]               = useState({});   // admin-set name overrides
 
   // Firestore document keys — all namespaced under golfFantasy collection
@@ -1901,6 +1933,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
   const summaryRevealKey = `summaryrevealed__${tournament.id}`;
   const prizeRevealKey  = `prizerevealed__${tournament.id}`;
   const prizePositionsKey = `prizepositions__${tournament.id}`;
+  const completedKey    = `completed__${tournament.id}`;
 
   const loadData = useCallback(async () => {
     const [{ players: p, espnCutScore, firstTeeTime: ftt }, savedCut] = await Promise.all([
@@ -1935,7 +1968,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const [firestorePicks, lockState, revealState, allPicksRaw, autoLock, tierData, natData, oddsData, paidData, summaryRevealData, prizeRevealData, prizePositionsData, savedPlayerNames] = await Promise.all([
+      const [firestorePicks, lockState, revealState, allPicksRaw, autoLock, tierData, natData, oddsData, paidData, summaryRevealData, prizeRevealData, prizePositionsData, savedPlayerNames, completedData] = await Promise.all([
         store.get(picksKey),
         store.get(lockKey),
         store.get(revealKey),
@@ -1949,6 +1982,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
         store.get(prizeRevealKey),
         store.get(prizePositionsKey),
         store.get("player_names"),
+        store.get(completedKey),
       ]);
       if (natData) setNationalityMap(natData);
       // Fall back to localStorage if Firestore didn't return picks (e.g. permission error)
@@ -1977,6 +2011,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
       if (summaryRevealData?.revealed) setSummaryRevealed(true);
       if (prizeRevealData?.revealed) setPrizeRevealed(true);
       if (prizePositionsData?.positions) setPrizePositions(prizePositionsData.positions);
+      if (completedData?.completed) setCompleted(true);
       if (savedPlayerNames) setPlayerNames(savedPlayerNames);
       // Load rankings: prefer Firestore (kept fresh by admin refresh), fall back to static
       const storedRankings = await store.get("worldRankings");
@@ -2231,6 +2266,12 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
     setPrizeRevealed(next);
   };
 
+  const toggleCompleted = async () => {
+    const next = !completed;
+    await store.set(completedKey, { completed: next, by: user.email, at: Date.now() });
+    setCompleted(next);
+  };
+
   const savePrizePositions = async (n) => {
     setPrizePositions(n);
     await store.set(prizePositionsKey, { positions: n, by: user.email, at: Date.now() });
@@ -2414,7 +2455,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
       </div>
 
       {view === "entries" && (isAdmin || (locked && revealed)) && (
-        <AdminEntriesView entries={allEntries} players={displayPlayers} cutScore={cutScore} tournament={tournament} rankMap={rankMap} isAdmin={isAdmin} nationalityMap={nationalityMap} tournamentOdds={tournamentOdds} tierOverrides={tierOverrides} paidMap={paidMap} onTogglePaid={togglePaid} playerNames={playerNames} />
+        <AdminEntriesView entries={allEntries} players={displayPlayers} cutScore={cutScore} tournament={tournament} rankMap={rankMap} isAdmin={isAdmin} nationalityMap={nationalityMap} tournamentOdds={tournamentOdds} tierOverrides={tierOverrides} paidMap={paidMap} onTogglePaid={togglePaid} playerNames={playerNames} completed={completed} potOverride={potOverride} prizePositions={prizePositions} extraPaidCount={extraPaidCount} />
       )}
 
       {view === "summary" && (isAdmin || summaryRevealed) && (
@@ -2719,6 +2760,21 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                   </div>
                 );
               })()}
+
+              {/* ── Competition Status ── */}
+              <div className="admin-section" style={{marginTop:"0.5rem"}}>
+                <div className="admin-label">Competition Status <Tip text="Mark this competition as completed to reveal prize winnings alongside each participant's score on the Entries leaderboard." /></div>
+                <div className="admin-row">
+                  <span className="status-text" style={{color: completed ? "#90d090" : "#c0a060"}}>
+                    <span className={`status-dot ${completed ? "green" : "amber"}`}></span>
+                    {completed ? "Completed — prize winnings shown to all participants" : "In progress — prize winnings hidden"}
+                  </span>
+                  {completed
+                    ? <button className="btn-hide" onClick={toggleCompleted}>Reopen</button>
+                    : <button className="btn-reveal" onClick={toggleCompleted}>Mark Completed</button>
+                  }
+                </div>
+              </div>
               </>}
             </div>
           )}
@@ -3106,7 +3162,7 @@ function TierBadge({ tier, rank, compact }) {
 }
 
 // ─── Admin Entries View ───────────────────────────────────────────────────────
-function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}, isAdmin = false, nationalityMap = {}, tournamentOdds = {}, tierOverrides = {}, paidMap = {}, onTogglePaid, playerNames = {} }) {
+function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}, isAdmin = false, nationalityMap = {}, tournamentOdds = {}, tierOverrides = {}, paidMap = {}, onTogglePaid, playerNames = {}, completed = false, potOverride = null, prizePositions = null, extraPaidCount = 0 }) {
   const [sortCol, setSortCol] = useState('savedAt');
   const [sortDir, setSortDir] = useState('desc');
   const [confirmUnpaidUid, setConfirmUnpaidUid] = useState(null);
@@ -3196,7 +3252,38 @@ function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}
     if (a.total !== b.total) return a.total - b.total;
     return (a.displayName || '').toLowerCase().localeCompare((b.displayName || '').toLowerCase());
   });
-  const scoreRank = Object.fromEntries(byScore.map((e, i) => [e.userId, i]));
+  // Tie-aware: players on the same score share the same rank number
+  const scoreRank = {};
+  let rankPos = 0;
+  while (rankPos < byScore.length) {
+    const score = byScore[rankPos].total;
+    let end = rankPos;
+    while (end < byScore.length && byScore[end].total === score) end++;
+    for (let k = rankPos; k < end; k++) scoreRank[byScore[k].userId] = rankPos;
+    rankPos = end;
+  }
+
+  // Prize winnings (only when competition is marked complete)
+  let winnings = null;
+  if (completed && entries.length > 0) {
+    const entryCount = entries.length + extraPaidCount;
+    const pot = potOverride !== null ? potOverride : entryCount * ENTRY_FEE;
+    const computeAmounts = n => {
+      const s = computePrizeSplits(n);
+      return s.map((pct, i) => {
+        if (i < s.length - 1) return Math.round(pot * pct / 100);
+        const prev = s.slice(0, -1).reduce((sum, p) => sum + Math.round(pot * p / 100), 0);
+        return pot - prev;
+      });
+    };
+    let maxPos = 1;
+    for (let n = 1; n <= MAX_PRIZE_POSITIONS; n++) {
+      const a = computeAmounts(n);
+      if (a[a.length - 1] >= MIN_BOTTOM_PRIZE) maxPos = n; else break;
+    }
+    const pos = Math.min(prizePositions ?? defaultPrizePositions(entryCount), maxPos);
+    winnings = computeWinnings(byScore, computeAmounts(pos));
+  }
 
   // Display sort
   const sorted = [...withScores].sort((a, b) => {
@@ -3270,6 +3357,7 @@ function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}
               <SortTh col="tierSum" style={{textAlign:"center"}}>Tier Sum</SortTh>
               <SortTh col="savedAt" style={{textAlign:"center"}}>Saved</SortTh>
               <SortTh col="total" style={{textAlign:"right"}}>Total</SortTh>
+              {completed && <th style={{textAlign:"right", color:"var(--gold)", whiteSpace:"nowrap"}}>Prize</th>}
             </tr>
           </thead>
           <tbody>
@@ -3335,6 +3423,14 @@ function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}
                   <td className={sc(entry.total)} style={{textAlign:"right", fontWeight:700, fontFamily:"'EB Garamond',serif", fontSize:"1rem"}}>
                     {players.length > 0 ? formatScore(entry.total) : "–"}
                   </td>
+                  {completed && (() => {
+                    const won = winnings?.[entry.userId] ?? 0;
+                    return (
+                      <td style={{textAlign:"right", fontFamily:"'Playfair Display',serif", fontSize:"0.92rem", whiteSpace:"nowrap", color: won > 0 ? "var(--gold)" : "var(--text-light)", fontWeight: won > 0 ? 700 : 400}}>
+                        {won > 0 ? `€${won}` : "—"}
+                      </td>
+                    );
+                  })()}
                 </tr>
               );
             })}

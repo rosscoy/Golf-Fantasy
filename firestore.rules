@@ -77,23 +77,34 @@ service cloud.firestore {
 
 
       // ── Tournament state — read-only for regular users ─────────────────────
-      // Lock, reveal, cut, autolock, tiers: users need to read these to display
-      // the correct UI state, but only admin can write them (handled by admin rule above).
+      // Lock, reveal, cut, autolock, tiers, prize config, completion status:
+      // users need to read these to display the correct UI state, but only
+      // admin can write them (handled by admin rule above).
 
       allow read: if isSignedIn() && (
-        part(docId, 0) == 'lock'     ||
-        part(docId, 0) == 'reveal'   ||
-        part(docId, 0) == 'cut'      ||
-        part(docId, 0) == 'autolock' ||
-        part(docId, 0) == 'tiers'
+        part(docId, 0) == 'lock'           ||
+        part(docId, 0) == 'reveal'         ||
+        part(docId, 0) == 'cut'            ||
+        part(docId, 0) == 'autolock'       ||
+        part(docId, 0) == 'tiers'          ||
+        part(docId, 0) == 'prizerevealed'  ||
+        part(docId, 0) == 'prizepositions' ||
+        part(docId, 0) == 'summaryrevealed'||
+        part(docId, 0) == 'completed'
       );
 
 
-      // ── World rankings ─────────────────────────────────────────────────────
-      // Any signed-in user can read (needed for tier calculation).
+      // ── Shared lookup docs ─────────────────────────────────────────────────
+      // World rankings, nationality map, name overrides, and per-tournament
+      // odds: any signed-in user can read (needed for tiers, flags, display names).
       // Only admin can write (handled by admin rule above).
 
-      allow read: if isSignedIn() && docId == 'worldRankings';
+      allow read: if isSignedIn() && (
+        docId == 'worldRankings'      ||
+        docId == 'player_nationality' ||
+        docId == 'player_names'       ||
+        part(docId, 0) == 'odds'
+      );
 
 
       // ── Activity logs (activityLog__{userId}__{timestamp}) ─────────────────
