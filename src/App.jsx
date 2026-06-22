@@ -2449,7 +2449,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
         {(isAdmin || summaryRevealed) && (
           <div className={`tab ${view==="summary"?"active":""}`} onClick={() => setView("summary")}>
             Summary
-            <div style={{fontSize:"0.68rem", letterSpacing:0, textTransform:"none", fontStyle:"italic", opacity:0.75, marginTop:"2px", lineHeight:1}}>Pick trends &amp; prizes</div>
+            <div style={{fontSize:"0.68rem", letterSpacing:0, textTransform:"none", fontStyle:"italic", opacity:0.75, marginTop:"2px", lineHeight:1}}>Pick trends</div>
           </div>
         )}
       </div>
@@ -2466,10 +2466,6 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
           tierOverrides={tierOverrides}
           rankMap={rankMap}
           isAdmin={isAdmin}
-          prizeRevealed={prizeRevealed}
-          prizePositions={prizePositions}
-          potOverride={potOverride}
-          extraPaidCount={extraPaidCount}
         />
       )}
 
@@ -2763,7 +2759,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
 
               {/* ── Competition Status ── */}
               <div className="admin-section" style={{marginTop:"0.5rem"}}>
-                <div className="admin-label">Competition Status <Tip text="Mark this competition as completed to reveal prize winnings alongside each participant's score on the Entries leaderboard." /></div>
+                <div className="admin-label">Competition Status <Tip text="Mark as completed to lock final standings. Prize winnings appear on the Competition Leaderboard once Prize Visibility is also revealed." /></div>
                 <div className="admin-row">
                   <span className="status-text" style={{color: completed ? "#90d090" : "#c0a060"}}>
                     <span className={`status-dot ${completed ? "green" : "amber"}`}></span>
@@ -2799,42 +2795,6 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
               </div>
             </div>
           )}
-
-          {/* Prize banner for non-admin when prizes are revealed */}
-          {!isAdmin && prizeRevealed && (() => {
-            const entryCount = allEntries.length + extraPaidCount;
-            const pot = entryCount * ENTRY_FEE;
-            const computeAmounts = n => {
-              const s = computePrizeSplits(n);
-              return s.map((pct, i) => {
-                if (i < s.length - 1) return Math.round(pot * pct / 100);
-                const prev = s.slice(0, -1).reduce((sum, p) => sum + Math.round(pot * p / 100), 0);
-                return pot - prev;
-              });
-            };
-            let maxPos = 1;
-            for (let n = 1; n <= MAX_PRIZE_POSITIONS; n++) {
-              const a = computeAmounts(n);
-              if (a[a.length - 1] >= MIN_BOTTOM_PRIZE) maxPos = n; else break;
-            }
-            const pos = Math.min(prizePositions ?? defaultPrizePositions(entryCount), maxPos);
-            const amounts = computeAmounts(pos);
-            const ordinals = ["1st","2nd","3rd","4th","5th","6th","7th","8th","9th","10th"];
-            if (entryCount === 0) return null;
-            return (
-              <div style={{background:"var(--gold-pale)", border:"1px solid #d4b96a", borderRadius:"4px", padding:"0.9rem 1.2rem", marginBottom:"1.2rem"}}>
-                <div style={{fontFamily:"'Playfair Display',serif", fontSize:"0.95rem", color:"var(--green-deep)", marginBottom:"0.6rem", fontWeight:600}}>Prize Breakdown</div>
-                <div style={{display:"flex", gap:"1rem", flexWrap:"wrap"}}>
-                  {amounts.map((amt, i) => (
-                    <div key={i} style={{display:"flex", alignItems:"center", gap:"6px", fontFamily:"'EB Garamond',serif", fontSize:"0.88rem"}}>
-                      <span style={{color: i === 0 ? "var(--gold)" : "#7a5a10", fontWeight:600}}>{ordinals[i]}</span>
-                      <span style={{color:"#5a4010", fontFamily:"'Playfair Display',serif", fontWeight:700}}>€{amt}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
 
           {/* Tier warning — shown when saved picks fall below minimum tier sum due to odds update */}
           {!locked && picks.length === MAX_PICKS && !tierOk && savedPickIds.length > 0 && (
@@ -3415,8 +3375,8 @@ function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}
   );
 }
 
-// ─── Summary View (pick trends + prize breakdown) ─────────────────────────────
-function SummaryView({ entries, displayPlayers, tournamentOdds, tierOverrides, rankMap, isAdmin, prizeRevealed, prizePositions, potOverride, extraPaidCount = 0 }) {
+// ─── Summary View (pick trends) ───────────────────────────────────────────────
+function SummaryView({ entries, displayPlayers, tournamentOdds, tierOverrides, rankMap, isAdmin }) {
   const oddsActive = Object.keys(tournamentOdds).length > 0;
 
   // Count how many times each golfer was picked, and determine their tier
@@ -3444,32 +3404,6 @@ function SummaryView({ entries, displayPlayers, tournamentOdds, tierOverrides, r
     if (byTier[tier]) byTier[tier].push(p);
   });
   Object.values(byTier).forEach(arr => arr.sort((a, b) => b.count - a.count));
-
-  // Prize breakdown
-  let prizeDisplay = null;
-  if (isAdmin || prizeRevealed) {
-    const entryCount = entries.length + extraPaidCount;
-    if (entryCount > 0) {
-      const pot = potOverride !== null ? potOverride : entryCount * ENTRY_FEE;
-      const computeAmounts = n => {
-        const s = computePrizeSplits(n);
-        return s.map((pct, i) => {
-          if (i < s.length - 1) return Math.round(pot * pct / 100);
-          const prev = s.slice(0, -1).reduce((sum, p) => sum + Math.round(pot * p / 100), 0);
-          return pot - prev;
-        });
-      };
-      let maxPos = 1;
-      for (let n = 1; n <= MAX_PRIZE_POSITIONS; n++) {
-        const a = computeAmounts(n);
-        if (a[a.length - 1] >= MIN_BOTTOM_PRIZE) maxPos = n; else break;
-      }
-      const pos = Math.min(prizePositions ?? defaultPrizePositions(entryCount), maxPos);
-      const amounts = computeAmounts(pos);
-      const ordinals = ["1st","2nd","3rd","4th","5th","6th","7th","8th","9th","10th"];
-      prizeDisplay = { pos, amounts, ordinals };
-    }
-  }
 
   return (
     <div style={{display:"flex", flexDirection:"column", gap:"1.5rem"}}>
@@ -3520,28 +3454,6 @@ function SummaryView({ entries, displayPlayers, tournamentOdds, tierOverrides, r
         )}
       </div>
 
-      {/* Prize breakdown */}
-      {prizeDisplay && (
-        <div className="section-card">
-          <div className="s-head">
-            <div>
-              <div className="s-head-title">Prize Breakdown</div>
-              <div className="s-head-sub">{prizeDisplay.pos} paid position{prizeDisplay.pos !== 1 ? "s" : ""}</div>
-            </div>
-          </div>
-          <div style={{padding:"1rem 1.4rem", display:"flex", flexDirection:"column", gap:"7px"}}>
-            {prizeDisplay.amounts.map((amt, i) => (
-              <div key={i} style={{display:"flex", alignItems:"center", gap:"10px"}}>
-                <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.82rem", color: i === 0 ? "var(--gold)" : "#9a8850", width:"30px", textAlign:"right", flexShrink:0}}>{prizeDisplay.ordinals[i]}</div>
-                <div style={{flex:1, height:"5px", borderRadius:"3px", background:"rgba(201,168,76,0.1)", overflow:"hidden", minWidth:"40px"}}>
-                  <div style={{width:`${prizeDisplay.amounts[i] / prizeDisplay.amounts[0] * 100}%`, height:"100%", background: i === 0 ? "var(--gold)" : "rgba(201,168,76,0.4)", borderRadius:"3px"}} />
-                </div>
-                <div style={{fontFamily:"'Playfair Display',serif", fontSize:"0.95rem", color: i === 0 ? "var(--gold)" : "#c8a850", width:"52px", textAlign:"right", flexShrink:0}}>€{amt}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -3648,6 +3560,7 @@ function CompetitionPage({ user, isAdmin }) {
   const [playerNames, setPlayerNames] = useState({});
   const [prizePositions, setPrizePositions] = useState(null);
   const [completed, setCompleted] = useState(false);
+  const [prizeRevealed, setPrizeRevealed] = useState(false);
   const compRefreshRef            = useRef(null);
 
   useEffect(() => {
@@ -3671,7 +3584,7 @@ function CompetitionPage({ user, isAdmin }) {
     if (!selected) return;
     (async () => {
       setLoading(true);
-      const [allPicks, { players: lp, espnCutScore }, savedCut, revealState, natData, savedPlayerNames, prizePositionsData, completedData] = await Promise.all([
+      const [allPicks, { players: lp, espnCutScore }, savedCut, revealState, natData, savedPlayerNames, prizePositionsData, completedData, prizeRevealData] = await Promise.all([
         store.get(`allpicks__${selected}`).then(v => v || {}),
         fetchLeaderboard(selected, events.find(e => e.id === selected)?.date),
         store.get(`cut__${selected}`),
@@ -3680,6 +3593,7 @@ function CompetitionPage({ user, isAdmin }) {
         store.get("player_names").then(v => v || {}),
         store.get(`prizepositions__${selected}`),
         store.get(`completed__${selected}`),
+        store.get(`prizerevealed__${selected}`),
       ]);
       if (natData) setNationalityMap(natData);
       setPlayerNames(savedPlayerNames);
@@ -3689,6 +3603,7 @@ function CompetitionPage({ user, isAdmin }) {
       setRevealed(!!revealState?.revealed);
       setPrizePositions(prizePositionsData?.positions ?? null);
       setCompleted(!!completedData?.completed);
+      setPrizeRevealed(!!prizeRevealData?.revealed);
 
       const computed = Object.values(allPicks).map(entry => {
         const total = entry.picks.reduce((sum, pk) => {
@@ -3746,9 +3661,9 @@ function CompetitionPage({ user, isAdmin }) {
     return acc;
   }, []);
 
-  // Prize winnings (only when competition is marked complete)
+  // Prize winnings: shown when prize visibility is revealed or competition is marked complete
   let winnings = null;
-  if (completed && rows.length > 0) {
+  if ((prizeRevealed || completed) && rows.length > 0) {
     const pot = rows.length * ENTRY_FEE;
     const computeAmounts = n => {
       const s = computePrizeSplits(n);
