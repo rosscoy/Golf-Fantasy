@@ -3678,6 +3678,7 @@ function CompetitionPage({ user, isAdmin }) {
   const [nationalityMap, setNationalityMap] = useState({});
   const [playerNames, setPlayerNames] = useState({});
   const [prizePositions, setPrizePositions] = useState(null);
+  const [completed, setCompleted] = useState(false);
   const compRefreshRef            = useRef(null);
 
   useEffect(() => {
@@ -3701,7 +3702,7 @@ function CompetitionPage({ user, isAdmin }) {
     if (!selected) return;
     (async () => {
       setLoading(true);
-      const [allPicks, { players: lp, espnCutScore }, savedCut, revealState, natData, savedPlayerNames, prizePositionsData] = await Promise.all([
+      const [allPicks, { players: lp, espnCutScore }, savedCut, revealState, natData, savedPlayerNames, prizePositionsData, completedData] = await Promise.all([
         store.get(`allpicks__${selected}`).then(v => v || {}),
         fetchLeaderboard(selected, events.find(e => e.id === selected)?.date),
         store.get(`cut__${selected}`),
@@ -3709,6 +3710,7 @@ function CompetitionPage({ user, isAdmin }) {
         store.get("player_nationality"),
         store.get("player_names").then(v => v || {}),
         store.get(`prizepositions__${selected}`),
+        store.get(`completed__${selected}`),
       ]);
       if (natData) setNationalityMap(natData);
       setPlayerNames(savedPlayerNames);
@@ -3717,6 +3719,7 @@ function CompetitionPage({ user, isAdmin }) {
       setCutScore(eff);
       setRevealed(!!revealState?.revealed);
       setPrizePositions(prizePositionsData?.positions ?? null);
+      setCompleted(!!completedData?.completed);
 
       const computed = Object.values(allPicks).map(entry => {
         const total = entry.picks.reduce((sum, pk) => {
@@ -3773,6 +3776,27 @@ function CompetitionPage({ user, isAdmin }) {
     acc.push(i === 0 ? 1 : rows[i - 1].total === row.total ? acc[i - 1] : i + 1);
     return acc;
   }, []);
+
+  // Prize winnings (only when competition is marked complete)
+  let winnings = null;
+  if (completed && rows.length > 0) {
+    const pot = rows.length * ENTRY_FEE;
+    const computeAmounts = n => {
+      const s = computePrizeSplits(n);
+      return s.map((pct, i) => {
+        if (i < s.length - 1) return Math.round(pot * pct / 100);
+        const prev = s.slice(0, -1).reduce((sum, p) => sum + Math.round(pot * p / 100), 0);
+        return pot - prev;
+      });
+    };
+    let maxPos = 1;
+    for (let n = 1; n <= MAX_PRIZE_POSITIONS; n++) {
+      const a = computeAmounts(n);
+      if (a[a.length - 1] >= MIN_BOTTOM_PRIZE) maxPos = n; else break;
+    }
+    const pos = Math.min(prizePositions ?? defaultPrizePositions(rows.length), maxPos);
+    winnings = computeWinnings(rows, computeAmounts(pos));
+  }
 
   return (
     <div>
@@ -3905,8 +3929,11 @@ function CompetitionPage({ user, isAdmin }) {
                   </div>
                 );
               })()}
-              <div className="comp-lb">
-                <div className="c-row hdr"><span>Rank</span><span>Participant</span><span>Score</span></div>
+              <div className="comp-lb" style={winnings ? {gridTemplateColumns:"60px 1fr auto auto"} : {}}>
+                <div className="c-row hdr" style={winnings ? {gridTemplateColumns:"60px 1fr auto auto"} : {}}>
+                  <span>Rank</span><span>Participant</span><span>Score</span>
+                  {winnings && <span style={{textAlign:"right", color:"var(--gold)"}}>Prize</span>}
+                </div>
 
                 {rows.map((row,i) => {
                     const prevIdx = prevRows.findIndex(p => p.userId === row.userId);
@@ -3915,8 +3942,9 @@ function CompetitionPage({ user, isAdmin }) {
                                  : moved < 0 ? <span style={{color:"#e05050", fontSize:"0.72rem"}}>▼{Math.abs(moved)}</span>
                                  : prevRows.length > 0 ? <span style={{color:"var(--text-light)", fontSize:"0.68rem"}}>–</span>
                                  : null;
+                    const won = winnings?.[row.userId] ?? 0;
                     return (
-                    <div key={row.userId} className={`c-row ${row.userId===user.uid?"me":""}`}>
+                    <div key={row.userId} className={`c-row ${row.userId===user.uid?"me":""}`} style={winnings ? {gridTemplateColumns:"60px 1fr auto auto"} : {}}>
                       <div className="c-rank">{tiedRanks[i] <= prizeCount ? `#${tiedRanks[i]}` : ""}{arrow}</div>
                       <div className="c-user">
                         {nationalityMap[row.userId] && <span style={{marginRight:"6px"}}><NatFlag nationality={nationalityMap[row.userId]} /></span>}
@@ -3937,6 +3965,9 @@ function CompetitionPage({ user, isAdmin }) {
                         </small>
                       </div>
                       <div className={`c-score ${sc(row.total)}`}>{formatScore(row.total)}</div>
+                      {winnings && <div style={{fontFamily:"'Playfair Display',serif", fontSize:"1rem", fontWeight:700, textAlign:"right", color: won > 0 ? "var(--gold)" : "var(--text-light)", whiteSpace:"nowrap"}}>
+                        {won > 0 ? `€${won}` : "—"}
+                      </div>}
                     </div>
                     );
                   })}
