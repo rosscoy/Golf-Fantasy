@@ -250,6 +250,15 @@ function normName(name) {
   return (name || "").toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
 }
 
+function editDistance(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({length: m+1}, (_, i) => Array.from({length: n+1}, (_, j) => i || j));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  return dp[m][n];
+}
+
 function getTierInfo(tier) {
   return TIER_BANDS.find(b => b.tier === tier) || TIER_BANDS[2];
 }
@@ -1919,6 +1928,9 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
   const [prizeRevealed, setPrizeRevealed]           = useState(false);
   const [completed, setCompleted]                   = useState(false);
   const [playerNames, setPlayerNames]               = useState({});   // admin-set name overrides
+  const [prefield, setPrefield]                     = useState([]);   // player names from odds, sorted fav→longshot
+  const [reconcileReport, setReconcileReport]       = useState(null); // {matched, unmatched} after ESPN loads
+  const [showReconcileDetail, setShowReconcileDetail] = useState(false);
 
   // Firestore document keys — all namespaced under golfFantasy collection
   const picksKey        = `picks__${user.uid}__${tournament.id}`;
@@ -1934,6 +1946,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
   const prizeRevealKey  = `prizerevealed__${tournament.id}`;
   const prizePositionsKey = `prizepositions__${tournament.id}`;
   const completedKey    = `completed__${tournament.id}`;
+  const prefieldKey     = `prefield__${tournament.id}`;
 
   const loadData = useCallback(async () => {
     const [{ players: p, espnCutScore, firstTeeTime: ftt }, savedCut] = await Promise.all([
@@ -1968,7 +1981,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const [firestorePicks, lockState, revealState, allPicksRaw, autoLock, tierData, natData, oddsData, paidData, summaryRevealData, prizeRevealData, prizePositionsData, savedPlayerNames, completedData] = await Promise.all([
+      const [firestorePicks, lockState, revealState, allPicksRaw, autoLock, tierData, natData, oddsData, paidData, summaryRevealData, prizeRevealData, prizePositionsData, savedPlayerNames, completedData, prefieldData] = await Promise.all([
         store.get(picksKey),
         store.get(lockKey),
         store.get(revealKey),
@@ -1983,6 +1996,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
         store.get(prizePositionsKey),
         store.get("player_names"),
         store.get(completedKey),
+        store.get(prefieldKey),
       ]);
       if (natData) setNationalityMap(natData);
       // Fall back to localStorage if Firestore didn't return picks (e.g. permission error)
@@ -2013,6 +2027,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
       if (prizePositionsData?.positions) setPrizePositions(prizePositionsData.positions);
       if (completedData?.completed) setCompleted(true);
       if (savedPlayerNames) setPlayerNames(savedPlayerNames);
+      if (prefieldData?.names?.length > 0) setPrefield(prefieldData.names);
       // Load rankings: prefer Firestore (kept fresh by admin refresh), fall back to static
       const storedRankings = await store.get("worldRankings");
       if (storedRankings?.rankings && Object.keys(storedRankings.rankings).length > 0) {
@@ -2058,6 +2073,31 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
     }, 2 * 60 * 1000); // every 2 minutes
     return () => clearInterval(autoRefreshRef.current);
   }, [loadData, tournament.date, tournament.endDate]);
+
+  // When ESPN field loads, silently remap any picks made against prefield stub IDs to real ESPN IDs
+  useEffect(() => {
+    if (players.length === 0) return;
+    setPicks(prev => {
+      if (!prev.some(pk => pk.id?.startsWith("pre__"))) return prev;
+      const matched = [];
+      const unmatched = [];
+      const next = prev.map(pk => {
+        if (!pk.id?.startsWith("pre__")) return pk;
+        const normN = pk.id.slice(5);
+        const match = players.find(ep => normName(ep.name) === normN);
+        if (match) {
+          matched.push({ prefieldName: pk.name, espnName: match.name });
+          return { id: match.id, name: match.name };
+        }
+        unmatched.push(pk.name);
+        return pk;
+      });
+      if (matched.length > 0 || unmatched.length > 0) {
+        setTimeout(() => setReconcileReport({ matched, unmatched }), 0);
+      }
+      return next;
+    });
+  }, [players]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleLock = async () => {
     const next = !locked;
@@ -2196,12 +2236,16 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
 
       // Aggregate best (lowest) decimal price per player across all bookmakers
       const bestPrice = {};
+      const origNames = {}; // normKey → original display name from the bookmaker with best odds
       for (const bm of (bestEvent.bookmakers || [])) {
         const market = bm.markets?.find(m => m.key === "outrights");
         if (!market) continue;
         for (const outcome of market.outcomes) {
           const key = normName(outcome.name);
-          if (!bestPrice[key] || outcome.price < bestPrice[key]) bestPrice[key] = outcome.price;
+          if (!bestPrice[key] || outcome.price < bestPrice[key]) {
+            bestPrice[key] = outcome.price;
+            origNames[key] = outcome.name;
+          }
         }
       }
 
@@ -2214,6 +2258,10 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
 
       const eventName = bestEvent.sport_title || bestEvent.home_team || bestSport;
       await store.set(oddsKey, { positions, updatedAt: Date.now(), eventName });
+      // Also save the pre-field: original player names in odds order, for early pick availability
+      const prefieldNames = sorted.map(([normN]) => origNames[normN] || normN);
+      await store.set(prefieldKey, { names: prefieldNames, updatedAt: Date.now(), eventName });
+      setPrefield(prefieldNames);
       setTournamentOdds(positions);
       setOddsMsg(`✓ ${sorted.length} players ranked by odds · ${eventName}`);
     } catch (e) {
@@ -2317,7 +2365,30 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
   // Enrich players with tier — odds-based when available, world rankings as fallback
   const rankMap = Object.fromEntries(rankings.map(r => [r.id, r.rank]));
   const oddsActive = Object.keys(tournamentOdds).length > 0;
-  const displayPlayers = players.map(p => {
+
+  // Stub player objects built from odds names when ESPN hasn't published the field yet
+  const prefieldActivePlayers = useMemo(() => {
+    if (players.length > 0 || prefield.length === 0) return [];
+    return prefield.map((name, i) => {
+      const normN = normName(name);
+      const oddsPos = tournamentOdds[normN] ?? (i + 1);
+      const baseTier = getTierForOddsPosition(oddsPos);
+      const tier = tierOverrides[`pre__${normN}`] ?? baseTier;
+      return {
+        id: `pre__${normN}`,
+        name,
+        position: String(i + 1),
+        score: null, actualScore: 0, adjusted: 0, fantasyScore: null,
+        playStatus: "not_started",
+        cut: false, withdrawn: false,
+        rank: null, oddsPos, tier, baseTier,
+        scoreCell: null,
+        isPrefield: true,
+      };
+    });
+  }, [players.length, prefield, tournamentOdds, tierOverrides]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const displayPlayers = players.length > 0 ? players.map(p => {
     // Correct false-positive MC flags. ESPN returns "CUT" as the score string for BOTH
     // actual MC players AND players who made the cut but haven't teed off in R3 yet.
     // The only reliable signal is ESPN's status field (statusSaysCut). The round-count
@@ -2335,7 +2406,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
     const tier = tierOverrides[p.id] ?? baseTier; // admin override takes precedence
     const cell = formatScoreCell(actualScore, fantasyScore, penalised);
     return { ...p, cut: effectiveCut, playStatus: correctedPlayStatus, adjusted, actualScore, fantasyScore, penalised, scoreCell: cell, rank, oddsPos, tier, baseTier };
-  });
+  }) : prefieldActivePlayers;
 
   const filtered      = displayPlayers.filter(p => !search || p.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -2647,6 +2718,113 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                 </div>
               </div>
 
+              {/* ── Pre-field Name Check ── */}
+              {prefield.length > 0 && (() => {
+                const espnNorms    = new Set(players.map(p => normName(p.name)));
+                const prefieldNorms = new Set(prefield.map(n => normName(n)));
+                const unmatched    = prefield.filter(n => !espnNorms.has(normName(n)));
+                const espnOnly     = players.filter(p => !prefieldNorms.has(normName(p.name)));
+                const stalePicks   = picks.filter(pk => pk.id?.startsWith("pre__"));
+                return (
+                  <div className="admin-section">
+                    <div className="admin-label">
+                      Pre-field Name Check
+                      <Tip text="Compares the odds-sourced pre-field to the ESPN player list. Unmatched names could not be auto-reconciled — picks for those players will not score." />
+                    </div>
+                    {players.length === 0 ? (
+                      <div className="admin-row" style={{flexWrap:"wrap", gap:"6px"}}>
+                        <span style={{color:"#90d090", fontSize:"0.82rem"}}>✓ {prefield.length} players pre-loaded · ESPN field not yet available</span>
+                        <button className="btn-sm" onClick={() => setShowReconcileDetail(s => !s)}>
+                          {showReconcileDetail ? "Hide" : "Preview"} Field
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="admin-row" style={{flexWrap:"wrap", gap:"6px"}}>
+                          <span style={{color: unmatched.length > 0 ? "#f08080" : "#90d090", fontSize:"0.82rem"}}>
+                            {unmatched.length === 0
+                              ? `✓ All ${prefield.length} names matched · ${espnOnly.length} ESPN-only (late entries)`
+                              : `⚠ ${unmatched.length} unmatched · ${espnOnly.length} ESPN-only`}
+                          </span>
+                          <button className="btn-sm" onClick={() => setShowReconcileDetail(s => !s)}>
+                            {showReconcileDetail ? "Hide" : "Show"} Details
+                          </button>
+                        </div>
+                        {stalePicks.length > 0 && (
+                          <div style={{marginTop:"4px", fontFamily:"'EB Garamond',serif", fontSize:"0.8rem", color:"#f08080"}}>
+                            ⚠ {stalePicks.length} of your picks still have pre-field IDs — re-save your team after fixing
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {showReconcileDetail && (
+                      <div style={{marginTop:"8px", padding:"8px 10px", background:"rgba(0,0,0,0.2)", borderRadius:"3px"}}>
+                        {players.length === 0 ? (
+                          <>
+                            <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.72rem", textTransform:"uppercase", letterSpacing:"0.08em", color:"#9a8850", marginBottom:"6px"}}>
+                              Pre-loaded field ({prefield.length} players · odds order)
+                            </div>
+                            <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(160px,1fr))", gap:"2px 12px"}}>
+                              {prefield.map((name, i) => (
+                                <div key={name} style={{fontFamily:"'EB Garamond',serif", fontSize:"0.82rem", color:"#c0b070", display:"flex", gap:"6px"}}>
+                                  <span style={{color:"#6a5830", minWidth:"22px", textAlign:"right"}}>{i+1}.</span>
+                                  <span>{name}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {unmatched.length > 0 && (
+                              <div style={{marginBottom:"10px"}}>
+                                <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.72rem", textTransform:"uppercase", letterSpacing:"0.08em", color:"#f08080", marginBottom:"5px"}}>
+                                  Prefield names with no ESPN match ({unmatched.length})
+                                </div>
+                                {unmatched.map(n => {
+                                  const norm = normName(n);
+                                  const closest = [...players]
+                                    .map(p => ({ p, dist: editDistance(norm, normName(p.name)) }))
+                                    .sort((a, b) => a.dist - b.dist)[0];
+                                  return (
+                                    <div key={n} style={{display:"flex", alignItems:"center", flexWrap:"wrap", gap:"6px", padding:"3px 0", borderBottom:"1px solid rgba(255,255,255,0.05)"}}>
+                                      <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.86rem", color:"#e0a0a0", minWidth:"160px"}}>{n}</span>
+                                      {closest && closest.dist <= 5 && (
+                                        <span style={{fontFamily:"'EB Garamond',serif", fontSize:"0.78rem", color:"#9a7060"}}>
+                                          → closest ESPN match: <strong style={{color:"#c0a080"}}>{closest.p.name}</strong>
+                                          <span style={{color:"#6a5030", marginLeft:"4px"}}>({closest.dist} char diff)</span>
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            {espnOnly.length > 0 && (
+                              <div>
+                                <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.72rem", textTransform:"uppercase", letterSpacing:"0.08em", color:"#7090c0", marginBottom:"4px"}}>
+                                  ESPN only — not in prefield ({espnOnly.length})
+                                </div>
+                                {espnOnly.slice(0, 15).map(p => (
+                                  <div key={p.id} style={{fontFamily:"'EB Garamond',serif", fontSize:"0.84rem", color:"#9ab0d0", padding:"2px 0"}}>{p.name}</div>
+                                ))}
+                                {espnOnly.length > 15 && (
+                                  <div style={{fontSize:"0.76rem", color:"#7090c0", marginTop:"2px"}}>…and {espnOnly.length - 15} more</div>
+                                )}
+                              </div>
+                            )}
+                            {unmatched.length === 0 && espnOnly.length === 0 && (
+                              <div style={{fontFamily:"'EB Garamond',serif", fontSize:"0.84rem", color:"#90d090"}}>
+                                Perfect match — every prefield name maps to an ESPN player.
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* ── Prize Money ── */}
               {(() => {
                 const entryCount = allEntries.length + extraPaidCount;
@@ -2784,6 +2962,33 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
             </div>
           )}
 
+          {/* Reconciliation report — shown when pre-field picks were auto-mapped to ESPN IDs */}
+          {reconcileReport && (
+            <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:"12px", marginBottom:"0.75rem", background:"#1a2a1a", border:"1px solid #4a7a4a55", borderRadius:"3px", padding:"0.7rem 1rem", fontFamily:"'EB Garamond',serif", fontSize:"0.86rem"}}>
+              <div>
+                {reconcileReport.matched.length > 0 && (
+                  <div style={{color:"#90d090", marginBottom: reconcileReport.unmatched.length > 0 ? "4px" : 0}}>
+                    ✓ {reconcileReport.matched.length} pick{reconcileReport.matched.length > 1 ? "s" : ""} auto-matched to ESPN IDs
+                    {reconcileReport.matched.some(m => m.prefieldName !== m.espnName) && (
+                      <span style={{color:"#70b070", marginLeft:"6px", fontSize:"0.78rem"}}>
+                        ({reconcileReport.matched.filter(m => m.prefieldName !== m.espnName).length} name spelling corrected)
+                      </span>
+                    )}
+                  </div>
+                )}
+                {reconcileReport.unmatched.length > 0 && (
+                  <div style={{color:"#f08080"}}>
+                    ⚠ Could not match: <strong>{reconcileReport.unmatched.join(", ")}</strong>
+                    <div style={{fontSize:"0.78rem", color:"#c07070", marginTop:"2px"}}>
+                      These players may have withdrawn or their name differs between odds and ESPN. Remove and re-pick.
+                    </div>
+                  </div>
+                )}
+              </div>
+              <button style={{background:"none", border:"none", color:"#6a8a6a", cursor:"pointer", fontSize:"1rem", lineHeight:1, flexShrink:0, padding:"0"}} onClick={() => setReconcileReport(null)}>×</button>
+            </div>
+          )}
+
           {cutScore !== null && (
             <div className="cut-banner">
               <div className="cut-info">
@@ -2847,8 +3052,14 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
             <div className="section-card">
               <div className="s-head">
                 <div>
-                  <div className="s-head-title">Live Leaderboard</div>
-                  <div className="s-head-sub">{locked ? "Picks locked" : "Click a player to pick or remove"}</div>
+                  <div className="s-head-title">
+                    {players.length === 0 && prefield.length > 0 ? "Pre-Field Preview" : "Live Leaderboard"}
+                  </div>
+                  <div className="s-head-sub">
+                    {players.length === 0 && prefield.length > 0
+                      ? "From betting odds — scores appear once ESPN publishes the field"
+                      : locked ? "Picks locked" : "Click a player to pick or remove"}
+                  </div>
                 </div>
                 <div style={{display:"flex", alignItems:"center", gap:"10px"}}>
                   <span className="picks-count-badge">{picks.length}/{MAX_PICKS}</span>
@@ -2885,9 +3096,19 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                   {cutScore !== null && <span style={{marginLeft:"auto"}}>* Fantasy adjusted: MC/WD → cut+10 · cap at cut+9</span>}
                 </div>
               )}
+              {players.length === 0 && prefield.length > 0 && (
+                <div style={{margin:"0 1.4rem 0.5rem", padding:"0.6rem 1rem", background:"rgba(201,168,76,0.08)", border:"1px solid rgba(201,168,76,0.25)", borderRadius:"3px", fontFamily:"'EB Garamond',serif", fontSize:"0.84rem", color:"#b8a060", display:"flex", alignItems:"flex-start", gap:"8px"}}>
+                  <span style={{fontSize:"1rem", flexShrink:0}}>⏳</span>
+                  <span>
+                    <strong style={{color:"var(--gold)"}}>Pre-field preview</strong> — tiers set from betting odds.
+                    Scores will appear once ESPN publishes the field (usually Tuesday before the tournament).
+                    You can make your picks now and save your team early.
+                  </span>
+                </div>
+              )}
               {loading
                 ? <div className="loading">Loading leaderboard…</div>
-                : players.length === 0
+                : displayPlayers.length === 0
                   ? <div className="empty">No player data yet.<br/>This tournament may not have started, or ESPN hasn't published scores.</div>
                   : (
                     <>
@@ -2896,7 +3117,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                         <thead>
                           <tr>
                             {[
-                              { col:"pos",     label:"#",       style:{textAlign:"center"} },
+                              { col:"pos",     label: players.length === 0 && prefield.length > 0 ? "Odds" : "#", style:{textAlign:"center"} },
                               { col:"name",    label:"Player",  style:{} },
                               { col:"tier",    label:"Tier", style:{textAlign:"center", width:"1px", whiteSpace:"nowrap"} },
                               { col:"score",   label:"Actual",  style:{textAlign:"right"}, className:"col-score" },
@@ -2929,19 +3150,23 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                                   <TierBadge tier={p.tier} rank={p.rank} />
                                 </td>
                                 <td className="col-score" style={{textAlign:"right", fontSize:"0.88rem"}}>
-                                  {p.cut
-                                    ? <span style={{color:"#e05050", fontWeight:700, fontSize:"0.75rem", letterSpacing:"0.06em"}}>CUT</span>
-                                    : p.withdrawn
-                                      ? <span style={{color:"#e05050", fontWeight:700, fontSize:"0.75rem", letterSpacing:"0.06em"}}>WD</span>
-                                      : <span className={sc(p.actualScore)}>{formatScore(p.actualScore)}</span>
+                                  {p.isPrefield
+                                    ? <span style={{color:"var(--text-light)", fontSize:"0.8rem"}}>–</span>
+                                    : p.cut
+                                      ? <span style={{color:"#e05050", fontWeight:700, fontSize:"0.75rem", letterSpacing:"0.06em"}}>CUT</span>
+                                      : p.withdrawn
+                                        ? <span style={{color:"#e05050", fontWeight:700, fontSize:"0.75rem", letterSpacing:"0.06em"}}>WD</span>
+                                        : <span className={sc(p.actualScore)}>{formatScore(p.actualScore)}</span>
                                   }
                                 </td>
                                 <td style={{textAlign:"center"}}>
-                                  {p.scoreCell?.fantasy != null
-                                    ? <span style={{color: p.scoreCell.penalised?"#e05050":"#5b9bd5", fontWeight:600, fontSize:"0.88rem"}}>{p.scoreCell.fantasy}</span>
-                                    : (p.cut || p.withdrawn)
-                                      ? <span style={{color:"#e05050", fontWeight:600, fontSize:"0.88rem"}}>—</span>
-                                      : <span style={{fontWeight:600, fontSize:"0.88rem"}} className={sc(p.actualScore)}>{formatScore(p.actualScore)}</span>
+                                  {p.isPrefield
+                                    ? <span style={{color:"var(--text-light)", fontSize:"0.8rem"}}>–</span>
+                                    : p.scoreCell?.fantasy != null
+                                      ? <span style={{color: p.scoreCell.penalised?"#e05050":"#5b9bd5", fontWeight:600, fontSize:"0.88rem"}}>{p.scoreCell.fantasy}</span>
+                                      : (p.cut || p.withdrawn)
+                                        ? <span style={{color:"#e05050", fontWeight:600, fontSize:"0.88rem"}}>—</span>
+                                        : <span style={{fontWeight:600, fontSize:"0.88rem"}} className={sc(p.actualScore)}>{formatScore(p.actualScore)}</span>
                                   }
                                 </td>
                                 <td style={{width:"1px", whiteSpace:"nowrap"}}>
