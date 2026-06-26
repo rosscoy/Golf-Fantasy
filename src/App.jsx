@@ -3565,7 +3565,7 @@ function CompetitionPage({ user, isAdmin }) {
 
   useEffect(() => {
     fetchTournaments().then(evs => {
-      const sorted = [...evs].sort((a,b) => new Date(a.date) - new Date(b.date));
+      const sorted = [...evs].filter(e => isMajor(e.name)).sort((a,b) => new Date(a.date) - new Date(b.date));
       setEvents(sorted);
       // Auto-select the live tournament, or failing that the most recent one
       const now = Date.now();
@@ -3701,7 +3701,7 @@ function CompetitionPage({ user, isAdmin }) {
           style={{padding:"0.6rem 0.9rem", border:"1px solid var(--cream-dark)", borderRadius:"2px", fontFamily:"'Crimson Text',serif", fontSize:"0.95rem", background:"var(--white)", color:"var(--text-dark)", outline:"none", cursor:"pointer"}}
           value={selected||""} onChange={e => setSelected(e.target.value)}
         >
-          {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}{isMajor(ev.name)?" (Major)":""}</option>)}
+          {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
         </select>
       </div>
 
@@ -3880,7 +3880,7 @@ function PlayersDirectory() {
       const now = Date.now();
       const past = evs.filter(e => {
         const end = e.endDate ? new Date(e.endDate).getTime() + 24*60*60*1000 : new Date(e.date).getTime() + 4*24*60*60*1000;
-        return end < now;
+        return end < now && isMajor(e.name);
       }).sort((a, b) => new Date(a.date) - new Date(b.date));
 
       const [playerNames, playerPhotos, natData] = await Promise.all([
@@ -4239,7 +4239,7 @@ function MyResultsPage({ user }) {
 
       // Load picks + leaderboard data for all past + current events
       const now = Date.now();
-      const relevant = sorted.filter(e => new Date(e.date).getTime() <= now);
+      const relevant = sorted.filter(e => new Date(e.date).getTime() <= now && isMajor(e.name));
 
       const loaded = await Promise.all(relevant.map(async ev => {
         const [myPicksRaw, allPicksRaw, savedCut, revealState] = await Promise.all([
@@ -5568,7 +5568,7 @@ function HistoricalArchive() {
         .filter(e => {
           const end = e.endDate ? new Date(e.endDate).getTime() + 24*60*60*1000
                                 : new Date(e.date).getTime() + 4*24*60*60*1000;
-          return end < Date.now();
+          return end < Date.now() && isMajor(e.name);
         })
         .sort((a,b) => new Date(b.date) - new Date(a.date));
 
