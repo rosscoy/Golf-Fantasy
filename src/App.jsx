@@ -10,7 +10,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { initializeApp } from "firebase/app";
 import {
-  getFirestore, doc, getDoc, setDoc, deleteDoc, collection, getDocs,
+  getFirestore, doc, getDoc, setDoc, deleteDoc, deleteField, collection, getDocs,
 } from "firebase/firestore";
 import {
   getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -52,6 +52,21 @@ const store = {
       await setDoc(doc(db, "golfFantasy", key), { value: val, updatedAt: Date.now() });
       return true;
     } catch (e) { console.error("store.set failed", key, e); return false; }
+  },
+  // Merge a single sub-field into a doc's `value` map without reading the whole doc first.
+  // Use this for docs shared across users (e.g. allpicks__{tid}) to avoid lost-update races
+  // where two people saving at once clobber each other's entries.
+  async setField(key, field, val) {
+    try {
+      await setDoc(doc(db, "golfFantasy", key), { value: { [field]: val }, updatedAt: Date.now() }, { merge: true });
+      return true;
+    } catch (e) { console.error("store.setField failed", key, field, e); return false; }
+  },
+  async delField(key, field) {
+    try {
+      await setDoc(doc(db, "golfFantasy", key), { value: { [field]: deleteField() }, updatedAt: Date.now() }, { merge: true });
+      return true;
+    } catch (e) { console.error("store.delField failed", key, field, e); return false; }
   },
   async del(key) {
     try { await deleteDoc(doc(db, "golfFantasy", key)); } catch {}
@@ -1931,6 +1946,8 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
   const [prefield, setPrefield]                     = useState([]);   // player names from odds, sorted fav→longshot
   const [reconcileReport, setReconcileReport]       = useState(null); // {matched, unmatched} after ESPN loads
   const [showReconcileDetail, setShowReconcileDetail] = useState(false);
+  const [recovery, setRecovery]                     = useState(null); // {rebuilt, added, changed} from checkForLostEntries
+  const [recoveryBusy, setRecoveryBusy]              = useState(false);
 
   // Firestore document keys — all namespaced under golfFantasy collection
   const picksKey        = `picks__${user.uid}__${tournament.id}`;
@@ -2336,16 +2353,17 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
       setTimeout(() => setSaveMsg(""), 4000);
       return;
     }
-    // Also update the shared picks document so the leaderboard can see everyone
-    const allPicks = await store.get(allPicksKey) || {};
-    allPicks[user.uid] = {
+    // Also update the shared picks document so the leaderboard can see everyone.
+    // Merge only our own field — a full read-modify-write here would race with other
+    // users saving at the same time and could silently clobber their entries.
+    const entry = {
       userId:      user.uid,
       displayName: playerNames[user.uid] || user.displayName || user.email,
       picks,
       savedAt:     Date.now(),
     };
-    await store.set(allPicksKey, allPicks);
-    setAllEntries(Object.values(allPicks));
+    await store.setField(allPicksKey, user.uid, entry);
+    setAllEntries(prev => [...prev.filter(e => e.userId !== user.uid), entry]);
     setSavedPickIds(picks.map(p => p.id));
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 2000);
@@ -2360,6 +2378,55 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
     store.get(`usermeta__${user.uid}`).then(meta => {
       store.set(`usermeta__${user.uid}`, { ...(meta || {}), lastPickSaved: Date.now() });
     });
+  };
+
+  // Recover entries lost to the allpicks lost-update race: each user's individual
+  // picks__{uid}__{tid} doc is written independently and is never affected by that race,
+  // so it's always the source of truth to rebuild the shared leaderboard doc from.
+  const checkForLostEntries = async () => {
+    setRecoveryBusy(true);
+    try {
+      const suffix = `__${tournament.id}`;
+      const [individualRaw, emails, names, currentAll] = await Promise.all([
+        store.getByPrefix("picks__"),
+        store.get("player_emails").then(v => v || {}),
+        store.get("player_names").then(v => v || {}),
+        store.get(allPicksKey).then(v => v || {}),
+      ]);
+      const rebuilt = {};
+      Object.entries(individualRaw).forEach(([key, val]) => {
+        if (!key.endsWith(suffix) || !Array.isArray(val) || val.length === 0) return;
+        const uid = key.slice("picks__".length, key.length - suffix.length);
+        const existing = currentAll[uid];
+        rebuilt[uid] = {
+          userId: uid,
+          displayName: names[uid] || existing?.displayName || (emails[uid] ? emails[uid].split("@")[0] : uid),
+          picks: val,
+          savedAt: existing?.savedAt || Date.now(),
+        };
+      });
+      const added   = Object.keys(rebuilt).filter(uid => !currentAll[uid]);
+      const changed = Object.keys(rebuilt).filter(uid => currentAll[uid] && JSON.stringify(currentAll[uid].picks) !== JSON.stringify(rebuilt[uid].picks));
+      setRecovery({ rebuilt, added, changed });
+    } finally {
+      setRecoveryBusy(false);
+    }
+  };
+
+  const applyRecovery = async () => {
+    if (!recovery) return;
+    setRecoveryBusy(true);
+    try {
+      const uids = [...recovery.added, ...recovery.changed];
+      await Promise.all(uids.map(uid => store.setField(allPicksKey, uid, recovery.rebuilt[uid])));
+      setAllEntries(prev => {
+        const others = prev.filter(e => !uids.includes(e.userId));
+        return [...others, ...uids.map(uid => recovery.rebuilt[uid])];
+      });
+      setRecovery(null);
+    } finally {
+      setRecoveryBusy(false);
+    }
   };
 
   // Enrich players with tier — odds-based when available, world rankings as fallback
@@ -2524,6 +2591,44 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
           </div>
         )}
       </div>
+
+      {view === "entries" && isAdmin && (
+        <div className="admin-section" style={{marginBottom:"1rem"}}>
+          <div className="admin-label">
+            Entry Recovery
+            <Tip text="Individual picks are saved per-player and are never affected by the shared leaderboard doc being overwritten by concurrent saves. This cross-checks the two and lets you restore any mismatch." />
+          </div>
+          <div className="admin-row" style={{flexWrap:"wrap", gap:"6px"}}>
+            <button className="btn-sm" onClick={checkForLostEntries} disabled={recoveryBusy}>
+              {recoveryBusy ? "Checking…" : "Check for Lost Entries"}
+            </button>
+            {recovery && (
+              <span style={{fontSize:"0.82rem", color: (recovery.added.length || recovery.changed.length) ? "#f08080" : "#90d090"}}>
+                {recovery.added.length === 0 && recovery.changed.length === 0
+                  ? "✓ No discrepancies — leaderboard matches individual picks"
+                  : `⚠ ${recovery.added.length} missing, ${recovery.changed.length} differing`}
+              </span>
+            )}
+          </div>
+          {recovery && (recovery.added.length > 0 || recovery.changed.length > 0) && (
+            <div style={{marginTop:"8px"}}>
+              {recovery.added.map(uid => (
+                <div key={uid} style={{fontFamily:"'EB Garamond',serif", fontSize:"0.84rem", color:"#e0a0a0"}}>
+                  + {recovery.rebuilt[uid].displayName} — missing from leaderboard ({recovery.rebuilt[uid].picks.length} picks found)
+                </div>
+              ))}
+              {recovery.changed.map(uid => (
+                <div key={uid} style={{fontFamily:"'EB Garamond',serif", fontSize:"0.84rem", color:"#e0c060"}}>
+                  ≠ {recovery.rebuilt[uid].displayName} — leaderboard picks differ from their saved team
+                </div>
+              ))}
+              <button className="btn-sm" style={{marginTop:"6px"}} onClick={applyRecovery} disabled={recoveryBusy}>
+                {recoveryBusy ? "Restoring…" : `Restore ${recovery.added.length + recovery.changed.length} ${recovery.added.length + recovery.changed.length === 1 ? "entry" : "entries"}`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {view === "entries" && (isAdmin || (locked && revealed)) && (
         <AdminEntriesView entries={allEntries} players={displayPlayers} cutScore={cutScore} tournament={tournament} rankMap={rankMap} isAdmin={isAdmin} nationalityMap={nationalityMap} tournamentOdds={tournamentOdds} tierOverrides={tierOverrides} paidMap={paidMap} onTogglePaid={togglePaid} playerNames={playerNames} />
@@ -5155,8 +5260,7 @@ function ParticipantDashboard() {
     await Promise.all(data.map(async row => {
       const tid = row.tournament.id;
       await store.del(`picks__${uid}__${tid}`);
-      const allPicks = await store.get(`allpicks__${tid}`);
-      if (allPicks?.[uid]) { delete allPicks[uid]; await store.set(`allpicks__${tid}`, allPicks); }
+      await store.delField(`allpicks__${tid}`, uid);
     }));
     // Update local state
     setPlayerStats(ps => ps.filter(p => p.uid !== uid));
@@ -5168,8 +5272,7 @@ function ParticipantDashboard() {
   const deleteEntry = async ({ uid, tid }) => {
     setDeletingEntryInProgress(true);
     await store.del(`picks__${uid}__${tid}`);
-    const allPicks = await store.get(`allpicks__${tid}`);
-    if (allPicks?.[uid]) { delete allPicks[uid]; await store.set(`allpicks__${tid}`, allPicks); }
+    await store.delField(`allpicks__${tid}`, uid);
     setData(prev => prev.map(row =>
       row.tournament.id === tid
         ? { ...row, entrants: row.entrants.filter(e => e.userId !== uid) }
