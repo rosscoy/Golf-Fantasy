@@ -5174,12 +5174,13 @@ function ParticipantDashboard() {
     const updated = { ...playerNames, [uid]: cleaned };
     await store.set("player_names", updated);
     setPlayerNames(updated);
-    // Propagate updated name into all allpicks docs for this user
-    await Promise.all(data.map(async row => {
-      const raw = await store.get(`allpicks__${row.tournament.id}`);
-      if (!raw?.[uid]) return;
-      raw[uid] = { ...raw[uid], displayName: cleaned };
-      await store.set(`allpicks__${row.tournament.id}`, raw);
+    // Propagate updated name into all allpicks docs for this user — merge only the
+    // displayName field (using already-loaded `data` to know which tournaments the
+    // user has an entry in) so this can't race with someone else saving picks at
+    // the same time and clobber their entry the way a full read-modify-write would.
+    await Promise.all(data.map(row => {
+      if (!row.entrants.some(e => e.userId === uid)) return null;
+      return store.setField(`allpicks__${row.tournament.id}`, uid, { displayName: cleaned });
     }));
     setPlayerStats(ps => ps.map(p => p.uid === uid ? { ...p, displayName: cleaned } : p));
     setAllUsers(au => au.map(u => u.uid === uid ? { ...u, name: cleaned } : u));
