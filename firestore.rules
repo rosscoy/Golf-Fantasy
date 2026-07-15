@@ -63,17 +63,24 @@ service cloud.firestore {
       // ── Combined leaderboard (allpicks__{tournamentId}) ────────────────────
       // Written by users when they save picks (updates their own entry within the doc).
       // Only readable by others after the admin has revealed entries.
-      // Note: the data model stores all entries in one map, so we can require
-      // authentication and lock checks but cannot prevent a determined bad actor
-      // from overwriting another user's entry without restructuring the data model.
+      // The data model stores all entries in one map, so writes are restricted to
+      // only ever touch the caller's own key — this is enforced here (not just in
+      // client code) so a stale/old client build can never clobber another user's
+      // entry, which is what silently dropped saved picks in the past.
 
       allow read: if isSignedIn()
         && part(docId, 0) == 'allpicks'
         && isRevealed(part(docId, 1));
 
-      allow write: if isSignedIn()
+      allow create: if isSignedIn()
         && part(docId, 0) == 'allpicks'
-        && !isLocked(part(docId, 1));
+        && !isLocked(part(docId, 1))
+        && request.resource.data.value.keys().hasOnly([request.auth.uid]);
+
+      allow update: if isSignedIn()
+        && part(docId, 0) == 'allpicks'
+        && !isLocked(part(docId, 1))
+        && request.resource.data.value.diff(resource.data.value).affectedKeys().hasOnly([request.auth.uid]);
 
 
       // ── Tournament state — read-only for regular users ─────────────────────
