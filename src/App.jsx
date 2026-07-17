@@ -597,8 +597,11 @@ async function fetchTournaments() {
   } catch { return []; }
 }
 
-// Parse competitors array (shared between both API response shapes)
-function parseCompetitors(competitors) {
+// Parse competitors array (shared between both API response shapes).
+// `statusById` (competitor id -> core API /status payload) is optional, authoritative
+// status data — the site API's scoreboard endpoint often omits `status` entirely for
+// competitors who withdrew, so this is the only reliable way to detect a WD in that case.
+function parseCompetitors(competitors, statusById = {}) {
   // Determine how many rounds have been played — use rounds with actual score data
   // (ESPN returns empty shell objects for future rounds, so raw length is unreliable)
   const roundCounts = competitors.map(c => {
@@ -616,8 +619,14 @@ function parseCompetitors(competitors) {
     const scoreRaw = typeof c.score === "string" ? c.score
                    : (c.score?.displayValue ?? c.totalScore ?? "E");
 
-    const statusStr  = (c.status?.displayName || c.status?.type?.name || c.status?.type || "").toLowerCase();
-    const statusDesc = (c.status?.type?.description || "").toLowerCase();
+    // Core API status uses type.name "STATUS_CUT" for BOTH withdrawn and missed-cut
+    // players, so only trust its human-readable fields (which say "Withdrawn"/"WD"
+    // vs "Cut"/"CUT") — never its type.name — to avoid conflating the two.
+    const coreStatus = statusById[c.id];
+    const coreStatusText = [coreStatus?.displayValue, coreStatus?.type?.shortDetail, coreStatus?.type?.detail, coreStatus?.type?.description]
+      .filter(Boolean).join(" ").toLowerCase();
+    const statusStr  = (c.status?.displayName || c.status?.type?.name || c.status?.type || "").toLowerCase() + " " + coreStatusText;
+    const statusDesc = (c.status?.type?.description || "").toLowerCase() + " " + coreStatusText;
 
     // Detect MC/WD from status string OR from having fewer rounds than leaders
     const statusSaysWD  = statusStr.includes("wd") || statusStr.includes("withdraw") || statusDesc.includes("withdraw");
@@ -767,6 +776,7 @@ async function fetchLeaderboard(eventId, eventDate) {
             // The site API competition date is always midnight ET (04:00 UTC) and
             // useless. The core API /status endpoint has an actual "teeTime" field.
             let firstTeeTime = null;
+            const statusById = {};
             try {
               const statusResults = await Promise.allSettled(
                 competitors.map(c =>
@@ -775,13 +785,16 @@ async function fetchLeaderboard(eventId, eventDate) {
                   ).then(r => r.ok ? r.json() : null).catch(() => null)
                 )
               );
+              statusResults.forEach((r, i) => {
+                if (r.status === 'fulfilled' && r.value) statusById[competitors[i].id] = r.value;
+              });
               const teeMs = statusResults
                 .filter(r => r.status === 'fulfilled' && r.value?.teeTime)
                 .map(r => new Date(r.value.teeTime).getTime())
                 .filter(t => !isNaN(t));
               if (teeMs.length > 0) firstTeeTime = new Date(Math.min(...teeMs)).toISOString();
             } catch {}
-            const { list, cutHappened } = parseCompetitors(competitors);
+            const { list, cutHappened } = parseCompetitors(competitors, statusById);
             return { players: list, espnCutScore: null, firstTeeTime, cutHappened };
           }
         } catch { continue; }
