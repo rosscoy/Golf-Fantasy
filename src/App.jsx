@@ -961,6 +961,17 @@ function resolveCutScore({ savedCut, espnCutScore, cutHappened }) {
   return espnCutScore ?? null;
 }
 
+// Whether the cut should be treated as official for scoring/capping purposes. Mirrors
+// resolveCutScore's "admin override always wins" rule: an admin manually setting the cut
+// score is asserting it's final, even if ESPN hasn't marked Round 3 as underway yet
+// (e.g. a suspended round, or ESPN just being slow to update). Without this, a manual
+// override would set the cut *value* but applyScoreRules would still refuse to apply any
+// penalties/caps since cutFinalized stayed false.
+function resolveCutFinalized({ savedCut, cutHappened }) {
+  const isManualOverride = savedCut !== null && savedCut !== undefined && !!savedCut.setBy;
+  return isManualOverride || !!cutHappened;
+}
+
 // Whether a player is projected to be on the right side of the cut line, based on the
 // current cut score. Returns null when it can't be determined (no cut score yet, or
 // a pre-field player with no live score) so callers can skip rendering a cut divider.
@@ -2090,7 +2101,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
     ]);
     setPlayers(p);
     setEspnCut(espnCutScore);
-    setCutFinalized(!!cutHappened);
+    setCutFinalized(resolveCutFinalized({ savedCut, cutHappened }));
     if (ftt) setFirstTeeTime(ftt);
 
     const isManualOverride = savedCut !== null && savedCut !== undefined && !!savedCut.setBy;
@@ -4119,10 +4130,11 @@ function CompetitionPage({ user, isAdmin }) {
       if (natData) setNationalityMap(natData);
       setPlayerNames(savedPlayerNames);
       const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+      const finalized = resolveCutFinalized({ savedCut, cutHappened });
       const wqs = computeWorstQualifyingScore(lp);
       setPlayers(lp);
       setCutScore(eff);
-      setCutFinalized(!!cutHappened);
+      setCutFinalized(finalized);
       setWorstQualifyingScore(wqs);
       setRevealed(!!revealState?.revealed);
       setPrizePositions(prizePositionsData?.positions ?? null);
@@ -4133,7 +4145,7 @@ function CompetitionPage({ user, isAdmin }) {
         const total = entry.picks.reduce((sum, pk) => {
           const live = lp.find(p => p.id===pk.id);
           if (!live) return sum;
-          return sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted;
+          return sum + applyScoreRules(live, eff, wqs, finalized).adjusted;
         }, 0);
         return { userId: entry.userId, displayName: savedPlayerNames[entry.userId] || entry.displayName, picks: entry.picks, total };
       });
@@ -4435,6 +4447,7 @@ function PlayersDirectory() {
         ]);
         if (!revealState?.revealed) return;
         const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+        const finalized = resolveCutFinalized({ savedCut, cutHappened });
         const wqs = computeWorstQualifyingScore(lp);
         const entries = Object.values(allPicksRaw);
         if (entries.length === 0) return;
@@ -4444,7 +4457,7 @@ function PlayersDirectory() {
           displayName: playerNames[entry.userId] || entry.displayName,
           total:       entry.picks.reduce((sum, pk) => {
             const live = lp.find(p => p.id === pk.id);
-            return live ? sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted : sum;
+            return live ? sum + applyScoreRules(live, eff, wqs, finalized).adjusted : sum;
           }, 0),
         })).sort((a, b) => a.total - b.total);
 
@@ -4616,6 +4629,7 @@ function SeasonStandings({ user }) {
           store.get(`cut__${ev.id}`),
         ]);
         const eff     = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+        const finalized = resolveCutFinalized({ savedCut, cutHappened });
         const wqs     = computeWorstQualifyingScore(lp);
         const entries = Object.values(allPicksRaw);
         if (entries.length === 0) return { id: ev.id, name: ev.name, status, entrants: 0 };
@@ -4625,7 +4639,7 @@ function SeasonStandings({ user }) {
           displayName: playerNames[entry.userId] || entry.displayName,
           total:       entry.picks.reduce((sum, pk) => {
             const live = lp.find(p => p.id === pk.id);
-            return live ? sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted : sum;
+            return live ? sum + applyScoreRules(live, eff, wqs, finalized).adjusted : sum;
           }, 0),
         })).sort((a, b) => a.total - b.total);
 
@@ -4787,18 +4801,19 @@ function MyResultsPage({ user }) {
 
         const { players: lp, espnCutScore, cutHappened } = await fetchLeaderboard(ev.id, ev.date);
         const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+        const finalized = resolveCutFinalized({ savedCut, cutHappened });
         const wqs = computeWorstQualifyingScore(lp);
 
         const myTotal = myPicksRaw.reduce((sum, pk) => {
           const live = lp.find(p => p.id === pk.id);
           if (!live) return sum;
-          return sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted;
+          return sum + applyScoreRules(live, eff, wqs, finalized).adjusted;
         }, 0);
 
         const myPicksWithScores = myPicksRaw.map(pk => {
           const live = lp.find(p => p.id === pk.id);
           if (!live) return { ...pk, display: "–" };
-          const { actualScore, fantasyScore, penalised } = applyScoreRules(live, eff, wqs, !!cutHappened);
+          const { actualScore, fantasyScore, penalised } = applyScoreRules(live, eff, wqs, finalized);
           const cell = formatScoreCell(actualScore, fantasyScore, penalised);
           return { ...pk, display: cell.fantasy ?? formatScore(actualScore), penalised };
         });
@@ -4810,7 +4825,7 @@ function MyResultsPage({ user }) {
           total: entry.picks.reduce((sum, pk) => {
             const live = lp.find(p => p.id === pk.id);
             if (!live) return sum;
-            return sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted;
+            return sum + applyScoreRules(live, eff, wqs, finalized).adjusted;
           }, 0),
         })).sort((a,b) => a.total - b.total);
 
@@ -5291,12 +5306,13 @@ function ParticipantDashboard() {
           store.get(`cut__${ev.id}`),
         ]);
         const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+        const finalized = resolveCutFinalized({ savedCut, cutHappened });
         const wqs = computeWorstQualifyingScore(lp);
         const standings = row.entrants.map(entry => ({
           uid: entry.userId, displayName: entry.displayName,
           total: entry.picks.reduce((sum, pk) => {
             const live = lp.find(p => p.id === pk.id);
-            return live ? sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted : sum;
+            return live ? sum + applyScoreRules(live, eff, wqs, finalized).adjusted : sum;
           }, 0),
         })).sort((a, b) => a.total - b.total);
 
@@ -6119,6 +6135,7 @@ function HistoricalArchive() {
 
         const { players: lp, espnCutScore, cutHappened } = await fetchLeaderboard(ev.id, ev.date);
         const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+        const finalized = resolveCutFinalized({ savedCut, cutHappened });
         const wqs = computeWorstQualifyingScore(lp);
 
         const standings = entrants.map(entry => ({
@@ -6128,7 +6145,7 @@ function HistoricalArchive() {
           total:       entry.picks.reduce((sum, pk) => {
             const live = lp.find(p => p.id === pk.id);
             if (!live) return sum;
-            return sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted;
+            return sum + applyScoreRules(live, eff, wqs, finalized).adjusted;
           }, 0),
         })).sort((a,b) => a.total - b.total);
 
