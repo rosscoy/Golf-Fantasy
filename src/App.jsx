@@ -7,7 +7,7 @@
 // 3. That's it — Firebase config below is already wired up.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "react";
 import { initializeApp } from "firebase/app";
 import {
   getFirestore, doc, getDoc, setDoc, deleteDoc, deleteField, collection, getDocs,
@@ -611,7 +611,7 @@ function parseCompetitors(competitors) {
   const maxRounds = Math.max(...roundCounts, 0);
   const cutHappened = maxRounds >= 3; // cut happens after round 2
 
-  return competitors.map((c, idx) => {
+  const list = competitors.map((c, idx) => {
     const name     = c.athlete?.displayName || c.athlete?.fullName || c.displayName || "Unknown";
     const scoreRaw = typeof c.score === "string" ? c.score
                    : (c.score?.displayValue ?? c.totalScore ?? "E");
@@ -702,6 +702,8 @@ function parseCompetitors(competitors) {
       twoRoundScore,
     };
   });
+
+  return { list, cutHappened };
 }
 
 async function fetchLeaderboard(eventId, eventDate) {
@@ -752,18 +754,19 @@ async function fetchLeaderboard(eventId, eventDate) {
                 .filter(t => !isNaN(t));
               if (teeMs.length > 0) firstTeeTime = new Date(Math.min(...teeMs)).toISOString();
             } catch {}
-            return { players: parseCompetitors(competitors), espnCutScore: null, firstTeeTime };
+            const { list, cutHappened } = parseCompetitors(competitors);
+            return { players: list, espnCutScore: null, firstTeeTime, cutHappened };
           }
         } catch { continue; }
       }
-      return { players: [], espnCutScore: null, firstTeeTime: null };
+      return { players: [], espnCutScore: null, firstTeeTime: null, cutHappened: false };
     })(),
     // Leaderboard endpoint (original approach, fallback)
     (async () => {
       const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?event=${eventId}`);
       const d = await r.json();
       const competitors = d?.tournament?.competitors || [];
-      if (competitors.length === 0) return { players: [], espnCutScore: null, firstTeeTime: null };
+      if (competitors.length === 0) return { players: [], espnCutScore: null, firstTeeTime: null, cutHappened: false };
       let espnCutScore = null;
       const t = d?.tournament;
       if (t?.cutScore !== undefined && t.cutScore !== null) {
@@ -781,12 +784,13 @@ async function fetchLeaderboard(eventId, eventDate) {
       // tournament.startDate / tournament.date are just the tournament's calendar date
       // (midnight local time ≈ 04:00 UTC for ET events) — not an actual tee time.
       // Don't use them as firstTeeTime.
-      return { players: parseCompetitors(competitors), espnCutScore, firstTeeTime: null };
+      const { list, cutHappened } = parseCompetitors(competitors);
+      return { players: list, espnCutScore, firstTeeTime: null, cutHappened };
     })(),
   ]);
 
   // Pick the result with more players; also gather firstTeeTime and espnCutScore from any result that has them
-  let best = { players: [], espnCutScore: null, firstTeeTime: null };
+  let best = { players: [], espnCutScore: null, firstTeeTime: null, cutHappened: false };
   for (const r of results) {
     if (r.status === "fulfilled" && r.value.players.length > best.players.length) {
       best = r.value;
@@ -854,6 +858,16 @@ function applyScoreRules(player, cutScore) {
   const capped    = Math.min(player.rawScore, cutScore + 9);
   const wasCapped = capped < player.rawScore;
   return { adjusted: capped, actualScore: player.rawScore, fantasyScore: wasCapped ? capped : null, penalised: false };
+}
+
+// Whether a player is projected to be on the right side of the cut line, based on the
+// current cut score. Returns null when it can't be determined (no cut score yet, or
+// a pre-field player with no live score) so callers can skip rendering a cut divider.
+function projectedMakesCut(player, cutScore) {
+  if (player.isPrefield || cutScore === null || cutScore === undefined) return null;
+  if (player.withdrawn || player.cut) return false;
+  if (typeof player.actualScore !== "number") return null;
+  return player.actualScore <= cutScore;
 }
 
 // Format score for display in a table cell — shows both actual and fantasy if different
@@ -1129,6 +1143,8 @@ const CSS = `
   .lb-table tr.is-picked:hover td{ background: rgba(201,168,76,0.32); }
   .lb-table tr.is-picked .name-c { color: var(--green-deep); font-weight: 700; }
   .lb-table tr.is-cut td         { opacity: 0.4; }
+  .lb-table tr.cut-line-row td   { padding: 0.3rem 0.8rem; text-align: center; font-family: 'EB Garamond', serif; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: #8a6a1a; background: var(--gold-pale); border-top: 1px dashed #d4b96a; border-bottom: 1px dashed #d4b96a; cursor: default; }
+  .lb-table tr.cut-line-row:hover td { background: var(--gold-pale); cursor: default; }
   .pos-c  { font-family: 'EB Garamond', serif; color: var(--text-light); font-size: 0.8rem; width: 22px; text-align: center; }
   .name-c { font-family: 'Crimson Text', serif; font-weight: 600; }
   .player-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; vertical-align: middle; position: relative; top: -1px; }
@@ -1916,6 +1932,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
   const [cutInput, setCutInput] = useState("");
   const [cutOverrideActive, setCutOverrideActive] = useState(false);
   const [cutAudit, setCutAudit] = useState(null); // {setBy, setAt, source}
+  const [cutFinalized, setCutFinalized] = useState(false); // true once round 3 has started — cutScore is official, not just projected
   const [tierOverrides, setTierOverrides] = useState({}); // {playerId: tier}
   const [view, setView]         = useState("picks"); // "picks" | "entries" | "tiers"
   const [allEntries, setAllEntries] = useState([]);
@@ -1966,12 +1983,13 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
   const prefieldKey     = `prefield__${tournament.id}`;
 
   const loadData = useCallback(async () => {
-    const [{ players: p, espnCutScore, firstTeeTime: ftt }, savedCut] = await Promise.all([
+    const [{ players: p, espnCutScore, firstTeeTime: ftt, cutHappened }, savedCut] = await Promise.all([
       fetchLeaderboard(tournament.id, tournament.date),
       store.get(cutKey),
     ]);
     setPlayers(p);
     setEspnCut(espnCutScore);
+    setCutFinalized(!!cutHappened);
     if (ftt) setFirstTeeTime(ftt);
     if (savedCut !== null && savedCut !== undefined) {
       const v = savedCut.value ?? savedCut;
@@ -2488,6 +2506,12 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
     if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortCol(col); setSortDir("asc"); }
   };
+  // Count of players currently projected to miss the cut, for the banner above the leaderboard.
+  // Only meaningful before the cut is official — afterwards `cut`/`withdrawn` are already final.
+  const projectedMissCount = !cutFinalized && cutScore !== null
+    ? displayPlayers.filter(p => projectedMakesCut(p, cutScore) === false).length
+    : null;
+
   const sortedFiltered = [...filtered].sort((a, b) => {
     let diff = 0;
     if (sortCol === "pos")     diff = parsePos(a.position) - parsePos(b.position);
@@ -3097,7 +3121,13 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
           {cutScore !== null && (
             <div className="cut-banner">
               <div className="cut-info">
-                Cut line: <strong>{formatScore(cutScore)}</strong>
+                {cutFinalized ? "Cut line" : "Projected cut"}: <strong>{formatScore(cutScore)}</strong>
+                {!cutFinalized && (
+                  <span style={{marginLeft:"10px", fontSize:"0.78rem", fontStyle:"italic", opacity:0.85}}>
+                    live estimate — will shift as Round 2 finishes
+                    {projectedMissCount !== null && projectedMissCount > 0 && <> · {projectedMissCount} player{projectedMissCount===1?"":"s"} currently on the wrong side</>}
+                  </span>
+                )}
                 <span style={{marginLeft:"14px", fontSize:"0.8rem", opacity:0.8}}>
                   MC / WD → {formatScore(cutScore+10)} · Cap for qualifiers → {formatScore(cutScore+9)}
                   {cutOverrideActive && <span style={{marginLeft:"8px", color:"#8b6010"}}>(admin override)</span>}
@@ -3238,11 +3268,21 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                           </tr>
                         </thead>
                         <tbody>
-                          {sortedFiltered.map(p => {
+                          {sortedFiltered.map((p, i) => {
                             const isPicked = picks.some(pk => pk.id===p.id);
                             const canAdd   = isPicked || picks.length < MAX_PICKS;
+                            // Cut divider — only meaningful when the table is grouped by standing (pos/score),
+                            // so it lands between the last projected-safe row and the first projected-miss row.
+                            const showCutDivider = (sortCol === "pos" || sortCol === "score") && cutScore !== null && (() => {
+                              const next = sortedFiltered[i + 1];
+                              if (!next) return false;
+                              const curr = projectedMakesCut(p, cutScore);
+                              const after = projectedMakesCut(next, cutScore);
+                              return curr !== null && after !== null && curr !== after;
+                            })();
                             return (
-                              <tr key={p.id}
+                              <Fragment key={p.id}>
+                              <tr
                                   className={`${isPicked?"is-picked":""} ${(p.cut||p.withdrawn)?"is-cut":""}`}
                                   onClick={() => !locked && togglePick(p)}
                                   style={{cursor: locked?"default":"pointer"}}
@@ -3288,6 +3328,14 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                                   )}
                                 </td>
                               </tr>
+                              {showCutDivider && (
+                                <tr className="cut-line-row">
+                                  <td colSpan={7}>
+                                    <span>{cutFinalized ? "Cut line" : "Projected cut"} — {formatScore(cutScore)}</span>
+                                  </td>
+                                </tr>
+                              )}
+                              </Fragment>
                             );
                           })}
                         </tbody>
