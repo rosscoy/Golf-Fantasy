@@ -718,7 +718,9 @@ async function fetchCutInfo(eventId) {
     const ev = await evRes.json();
     const tournamentRef = ev?.tournament?.$ref;
     if (!tournamentRef) return null;
-    const tRes = await fetch(tournamentRef);
+    // ESPN's $ref links are served as plain http:// — fetching that from our https:// page
+    // gets silently blocked as mixed content in every browser, so force https here.
+    const tRes = await fetch(tournamentRef.replace(/^http:\/\//, "https://"));
     if (!tRes.ok) return null;
     const t = await tRes.json();
     if (typeof t.cutScore !== "number") return null;
