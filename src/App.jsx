@@ -706,6 +706,29 @@ function parseCompetitors(competitors) {
   return { list, cutHappened };
 }
 
+// Authoritative cut line — ESPN computes this server-side (rank-based: top `cutCount`
+// players and ties) and exposes it on the tournament resource, keyed by season. The
+// site API's scoreboard/leaderboard endpoints either omit it or omit the per-competitor
+// status data needed to estimate it, so this is the primary source; the player-score
+// heuristic in fetchLeaderboard is only a fallback for when this call fails.
+async function fetchCutInfo(eventId) {
+  try {
+    const evRes = await fetch(`https://sports.core.api.espn.com/v2/sports/golf/leagues/pga/events/${eventId}?lang=en&region=us`);
+    if (!evRes.ok) return null;
+    const ev = await evRes.json();
+    const tournamentRef = ev?.tournament?.$ref;
+    if (!tournamentRef) return null;
+    const tRes = await fetch(tournamentRef);
+    if (!tRes.ok) return null;
+    const t = await tRes.json();
+    if (typeof t.cutScore !== "number") return null;
+    const cutHappened = (typeof t.currentRound === "number" && typeof t.cutRound === "number")
+      ? t.currentRound > t.cutRound
+      : null;
+    return { cutScore: t.cutScore, cutCount: t.cutCount ?? null, cutHappened };
+  } catch { return null; }
+}
+
 async function fetchLeaderboard(eventId, eventDate) {
   // Strategy 1: scoreboard?dates=YYYYMMDD — most reliable, same source as ESPN website
   // Strategy 2: leaderboard?event=ID — fallback, different response shape
@@ -723,6 +746,8 @@ async function fetchLeaderboard(eventId, eventDate) {
   }
   const todayStr = new Date().toISOString().slice(0,10).replace(/-/g,"");
   if (!datesToTry.includes(todayStr)) datesToTry.push(todayStr);
+
+  const cutInfoPromise = fetchCutInfo(eventId);
 
   const results = await Promise.allSettled([
     // Scoreboard strategy — try each date until we find competitors for this exact event
@@ -829,6 +854,15 @@ async function fetchLeaderboard(eventId, eventDate) {
         if (worstCut >= -10 && worstCut <= 12) best.espnCutScore = worstCut;
       }
     }
+  }
+
+  // Authoritative cut info from the core API tournament resource overrides both the
+  // leaderboard-endpoint value and the player-score heuristic above — it's ESPN's own
+  // computed cut line (top `cutCount` and ties), not a guess from partial data.
+  const cutInfo = await cutInfoPromise;
+  if (cutInfo) {
+    best.espnCutScore = cutInfo.cutScore;
+    if (cutInfo.cutHappened !== null) best.cutHappened = cutInfo.cutHappened;
   }
 
   return best;
