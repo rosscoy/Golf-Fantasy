@@ -896,6 +896,23 @@ function applyScoreRules(player, cutScore) {
   return { adjusted: capped, actualScore: player.rawScore, fantasyScore: wasCapped ? capped : null, penalised: false };
 }
 
+// Resolve the cut score to actually use for scoring/display, given what's persisted in
+// Firestore (`cut__{tournamentId}`) and what a fresh fetchLeaderboard() call just returned.
+// An admin override always wins. Otherwise: once the cut is official, a persisted
+// non-manual value is trustworthy (it's frozen precisely so scoring keeps working after
+// ESPN stops returning live data for the event). While the cut is still live/projected,
+// always prefer the fresh ESPN value over a stale snapshot from an earlier load — it can
+// only get more accurate as the round progresses, never less.
+function resolveCutScore({ savedCut, espnCutScore, cutHappened }) {
+  const isManualOverride = savedCut !== null && savedCut !== undefined && !!savedCut.setBy;
+  if (isManualOverride) return savedCut.value ?? savedCut;
+  if (cutHappened) {
+    const persistedAutoValue = (savedCut !== null && savedCut !== undefined) ? (savedCut.value ?? savedCut) : null;
+    return espnCutScore ?? persistedAutoValue;
+  }
+  return espnCutScore ?? null;
+}
+
 // Whether a player is projected to be on the right side of the cut line, based on the
 // current cut score. Returns null when it can't be determined (no cut score yet, or
 // a pre-field player with no live score) so callers can skip rendering a cut divider.
@@ -2027,23 +2044,34 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
     setEspnCut(espnCutScore);
     setCutFinalized(!!cutHappened);
     if (ftt) setFirstTeeTime(ftt);
-    if (savedCut !== null && savedCut !== undefined) {
-      const v = savedCut.value ?? savedCut;
+
+    const isManualOverride = savedCut !== null && savedCut !== undefined && !!savedCut.setBy;
+    const v = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+    if (isManualOverride) {
+      // Admin override always wins, regardless of live/projected state.
       setCutScore(v);
-      setCutOverrideActive(savedCut.setBy ? true : false); // manual overrides show as active; auto-saved ESPN cuts do not
+      setCutOverrideActive(true);
       setCutInput(String(v));
-      setCutAudit(savedCut.setBy ? savedCut : null);
-    } else if (savedCut === null && espnCutScore !== null && espnCutScore !== undefined) {
-      // Doc confirmed absent — auto-persist ESPN cut so it survives after the tournament ends and ESPN stops returning it
-      await store.set(cutKey, { value: espnCutScore, source: "espn_auto", setAt: Date.now() });
-      setCutScore(espnCutScore);
+      setCutAudit(savedCut);
+    } else if (cutHappened) {
+      // Cut is official — freeze the ESPN value in Firestore so it survives once ESPN
+      // stops returning live data for this event. Always overwrites any earlier
+      // non-manual auto value rather than trusting whatever was last persisted.
+      if (espnCutScore !== null && espnCutScore !== undefined) {
+        await store.set(cutKey, { value: espnCutScore, source: "espn_auto", setAt: Date.now() });
+      }
+      setCutScore(v);
       setCutOverrideActive(false);
+      setCutInput("");
       setCutAudit(null);
     } else {
-      // savedCut is undefined (Firestore read error) or no cut available at all
-      // Show ESPN cut for display if present, but never write to Firestore to avoid overwriting a manual override
-      setCutScore(espnCutScore ?? null);
+      // Still live/projected — never trust a stale persisted snapshot from an earlier
+      // load here, just reflect whatever ESPN is saying right now (or nothing, if ESPN
+      // hasn't published a cut estimate yet). The input box stays empty since there's
+      // no manual override to show.
+      setCutScore(v);
       setCutOverrideActive(false);
+      setCutInput("");
       setCutAudit(null);
     }
     setLoading(false);
@@ -4008,7 +4036,7 @@ function CompetitionPage({ user, isAdmin }) {
     if (!selected) return;
     (async () => {
       setLoading(true);
-      const [allPicks, { players: lp, espnCutScore }, savedCut, revealState, natData, savedPlayerNames, prizePositionsData, completedData, prizeRevealData] = await Promise.all([
+      const [allPicks, { players: lp, espnCutScore, cutHappened }, savedCut, revealState, natData, savedPlayerNames, prizePositionsData, completedData, prizeRevealData] = await Promise.all([
         store.get(`allpicks__${selected}`).then(v => v || {}),
         fetchLeaderboard(selected, events.find(e => e.id === selected)?.date),
         store.get(`cut__${selected}`),
@@ -4021,7 +4049,7 @@ function CompetitionPage({ user, isAdmin }) {
       ]);
       if (natData) setNationalityMap(natData);
       setPlayerNames(savedPlayerNames);
-      const eff = (savedCut?.value ?? savedCut) ?? espnCutScore;
+      const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
       setPlayers(lp);
       setCutScore(eff);
       setRevealed(!!revealState?.revealed);
@@ -4318,14 +4346,14 @@ function PlayersDirectory() {
 
       await Promise.all(past.map(async ev => {
         const yr = new Date(ev.date).getFullYear();
-        const [allPicksRaw, { players: lp, espnCutScore }, savedCut, revealState] = await Promise.all([
+        const [allPicksRaw, { players: lp, espnCutScore, cutHappened }, savedCut, revealState] = await Promise.all([
           store.get(`allpicks__${ev.id}`).then(v => v || {}),
           fetchLeaderboard(ev.id, ev.date),
           store.get(`cut__${ev.id}`),
           store.get(`reveal__${ev.id}`),
         ]);
         if (!revealState?.revealed) return;
-        const eff = (savedCut?.value ?? savedCut) ?? espnCutScore;
+        const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
         const entries = Object.values(allPicksRaw);
         if (entries.length === 0) return;
 
@@ -4500,12 +4528,12 @@ function SeasonStandings({ user }) {
 
         if (status === "upcoming") return { id: ev.id, name: ev.name, status, entrants: 0 };
 
-        const [allPicksRaw, { players: lp, espnCutScore }, savedCut] = await Promise.all([
+        const [allPicksRaw, { players: lp, espnCutScore, cutHappened }, savedCut] = await Promise.all([
           store.get(`allpicks__${ev.id}`).then(v => v || {}),
           fetchLeaderboard(ev.id, ev.date),
           store.get(`cut__${ev.id}`),
         ]);
-        const eff     = (savedCut?.value ?? savedCut) ?? espnCutScore;
+        const eff     = resolveCutScore({ savedCut, espnCutScore, cutHappened });
         const entries = Object.values(allPicksRaw);
         if (entries.length === 0) return { id: ev.id, name: ev.name, status, entrants: 0 };
 
@@ -4674,8 +4702,8 @@ function MyResultsPage({ user }) {
         ]);
         if (!myPicksRaw || myPicksRaw.length === 0) return null;
 
-        const { players: lp, espnCutScore } = await fetchLeaderboard(ev.id, ev.date);
-        const eff = (savedCut?.value ?? savedCut) ?? espnCutScore;
+        const { players: lp, espnCutScore, cutHappened } = await fetchLeaderboard(ev.id, ev.date);
+        const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
 
         const myTotal = myPicksRaw.reduce((sum, pk) => {
           const live = lp.find(p => p.id === pk.id);
@@ -5174,11 +5202,11 @@ function ParticipantDashboard() {
             entrants: row.entrants.map(e => ({ uid: e.userId, displayName: e.displayName, position: null, outOf: row.entrants.length })),
           };
         }
-        const [{ players: lp, espnCutScore }, savedCut] = await Promise.all([
+        const [{ players: lp, espnCutScore, cutHappened }, savedCut] = await Promise.all([
           fetchLeaderboard(ev.id, ev.date),
           store.get(`cut__${ev.id}`),
         ]);
-        const eff = (savedCut?.value ?? savedCut) ?? espnCutScore;
+        const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
         const standings = row.entrants.map(entry => ({
           uid: entry.userId, displayName: entry.displayName,
           total: entry.picks.reduce((sum, pk) => {
@@ -6004,8 +6032,8 @@ function HistoricalArchive() {
         const entrants = Object.values(allPicksRaw);
         if (entrants.length === 0) return null;
 
-        const { players: lp, espnCutScore } = await fetchLeaderboard(ev.id, ev.date);
-        const eff = (savedCut?.value ?? savedCut) ?? espnCutScore;
+        const { players: lp, espnCutScore, cutHappened } = await fetchLeaderboard(ev.id, ev.date);
+        const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
 
         const standings = entrants.map(entry => ({
           uid:         entry.userId,
