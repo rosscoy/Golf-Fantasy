@@ -884,12 +884,31 @@ async function fetchLeaderboard(eventId, eventDate) {
 }
 
 // ─── Scoring Logic ────────────────────────────────────────────────────────────
-function applyScoreRules(player, cutScore) {
-  if (cutScore === null || cutScore === undefined) {
+// Best (lowest) raw score among players who actually missed the cut — used as the
+// base for the MC/WD penalty and the qualifiers' cap instead of the cut line itself,
+// since the cut line is the score of golfers still playing, not of anyone who was cut.
+// Expects `p.cut` to already reflect the corrected/effective MC flag. Excludes
+// withdrawn players, whose scores are often incomplete and artificially low.
+function computeWorstQualifyingScore(players) {
+  let worst = null;
+  for (const p of players) {
+    if (p.withdrawn || !p.cut) continue;
+    if (typeof p.rawScore !== "number") continue;
+    if (worst === null || p.rawScore < worst) worst = p.rawScore;
+  }
+  return worst;
+}
+
+function applyScoreRules(player, cutScore, worstQualifyingScore, cutFinalized) {
+  // Nothing is capped or penalised until the cut is official (Round 3 under way) and
+  // at least one player has actually missed it — a projected cut score during Rounds
+  // 1-2 is only ever a display estimate, never applied to scoring.
+  if (cutScore === null || cutScore === undefined || !cutFinalized ||
+      worstQualifyingScore === null || worstQualifyingScore === undefined) {
     return { adjusted: player.rawScore, actualScore: player.rawScore, fantasyScore: null, penalised: false };
   }
   if (player.withdrawn) {
-    const s = cutScore + 10;
+    const s = worstQualifyingScore + 10;
     return { adjusted: s, actualScore: player.rawScore, fantasyScore: s, penalised: true };
   }
   // Trust ESPN's explicit status (statusSaysCut) as the authoritative MC signal.
@@ -901,10 +920,10 @@ function applyScoreRules(player, cutScore) {
   const missedCut = player.statusSaysCut ||
     (player.cut && !rawIsNonNumeric && player.rawScore >= cutScore);
   if (missedCut) {
-    const s = cutScore + 10;
+    const s = worstQualifyingScore + 10;
     return { adjusted: s, actualScore: player.rawScore, fantasyScore: s, penalised: true };
   }
-  const capped    = Math.min(player.rawScore, cutScore + 9);
+  const capped    = Math.min(player.rawScore, worstQualifyingScore + 9);
   const wasCapped = capped < player.rawScore;
   return { adjusted: capped, actualScore: player.rawScore, fantasyScore: wasCapped ? capped : null, penalised: false };
 }
@@ -2550,24 +2569,28 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
     });
   }, [players.length, prefield, tournamentOdds, tierOverrides]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const displayPlayers = players.length > 0 ? players.map(p => {
-    // Correct false-positive MC flags. ESPN returns "CUT" as the score string for BOTH
-    // actual MC players AND players who made the cut but haven't teed off in R3 yet.
-    // The only reliable signal is ESPN's status field (statusSaysCut). The round-count
-    // heuristic (roundsMissedCut) is used as a fallback only when the score is a real
-    // numeric value at or above the cut line — never when the score is the "CUT" string.
+  // Correct false-positive MC flags. ESPN returns "CUT" as the score string for BOTH
+  // actual MC players AND players who made the cut but haven't teed off in R3 yet.
+  // The only reliable signal is ESPN's status field (statusSaysCut). The round-count
+  // heuristic (roundsMissedCut) is used as a fallback only when the score is a real
+  // numeric value at or above the cut line — never when the score is the "CUT" string.
+  const correctedPlayers = players.map(p => {
     const scoreStr = String(p.score ?? "");
     const rawIsNonNumeric = scoreStr === "" || isNaN(parseInt(scoreStr.replace("+", ""), 10));
     const effectiveCut = p.statusSaysCut ||
       (p.cut && !rawIsNonNumeric && cutScore !== null && p.rawScore >= cutScore);
     const correctedPlayStatus = (!effectiveCut && p.cut) ? "not_started" : p.playStatus;
-    const { adjusted, actualScore, fantasyScore, penalised } = applyScoreRules({ ...p, cut: effectiveCut }, cutScore);
+    return { ...p, cut: effectiveCut, playStatus: correctedPlayStatus };
+  });
+  const worstQualifyingScore = computeWorstQualifyingScore(correctedPlayers);
+  const displayPlayers = players.length > 0 ? correctedPlayers.map(p => {
+    const { adjusted, actualScore, fantasyScore, penalised } = applyScoreRules(p, cutScore, worstQualifyingScore, cutFinalized);
     const rank = rankMap[p.id] || null;
     const oddsPos = oddsActive ? (tournamentOdds[normName(p.name)] ?? null) : null;
     const baseTier = oddsPos !== null ? getTierForOddsPosition(oddsPos) : getTierForRank(rank);
     const tier = tierOverrides[p.id] ?? baseTier; // admin override takes precedence
     const cell = formatScoreCell(actualScore, fantasyScore, penalised);
-    return { ...p, cut: effectiveCut, playStatus: correctedPlayStatus, adjusted, actualScore, fantasyScore, penalised, scoreCell: cell, rank, oddsPos, tier, baseTier };
+    return { ...p, adjusted, actualScore, fantasyScore, penalised, scoreCell: cell, rank, oddsPos, tier, baseTier };
   }) : prefieldActivePlayers;
 
   const filtered      = displayPlayers.filter(p => !search || p.name.toLowerCase().includes(search.toLowerCase()));
@@ -2732,7 +2755,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
       )}
 
       {view === "entries" && (isAdmin || (locked && revealed)) && (
-        <AdminEntriesView entries={allEntries} players={displayPlayers} cutScore={cutScore} tournament={tournament} rankMap={rankMap} isAdmin={isAdmin} nationalityMap={nationalityMap} tournamentOdds={tournamentOdds} tierOverrides={tierOverrides} paidMap={paidMap} onTogglePaid={togglePaid} playerNames={playerNames} />
+        <AdminEntriesView entries={allEntries} players={displayPlayers} cutScore={cutScore} cutFinalized={cutFinalized} tournament={tournament} rankMap={rankMap} isAdmin={isAdmin} nationalityMap={nationalityMap} tournamentOdds={tournamentOdds} tierOverrides={tierOverrides} paidMap={paidMap} onTogglePaid={togglePaid} playerNames={playerNames} />
       )}
 
       {view === "summary" && (isAdmin || summaryRevealed) && (
@@ -3205,10 +3228,19 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                     {projectedMissCount !== null && projectedMissCount > 0 && <> · {projectedMissCount} player{projectedMissCount===1?"":"s"} currently on the wrong side</>}
                   </span>
                 )}
-                <span style={{marginLeft:"14px", fontSize:"0.8rem", opacity:0.8}}>
-                  MC / WD → {formatScore(cutScore+10)} · Cap for qualifiers → {formatScore(cutScore+9)}
-                  {cutOverrideActive && <span style={{marginLeft:"8px", color:"#8b6010"}}>(admin override)</span>}
-                </span>
+                {(() => {
+                  const penaltyBase = cutFinalized ? worstQualifyingScore : cutScore;
+                  return penaltyBase !== null && penaltyBase !== undefined ? (
+                    <span style={{marginLeft:"14px", fontSize:"0.8rem", opacity:0.8}}>
+                      MC / WD → {formatScore(penaltyBase+10)} · Cap for qualifiers → {formatScore(penaltyBase+9)}
+                      {cutOverrideActive && <span style={{marginLeft:"8px", color:"#8b6010"}}>(admin override)</span>}
+                    </span>
+                  ) : cutFinalized ? (
+                    <span style={{marginLeft:"14px", fontSize:"0.8rem", opacity:0.8, fontStyle:"italic"}}>
+                      awaiting confirmed missed-cut scores…
+                    </span>
+                  ) : null;
+                })()}
               </div>
             </div>
           )}
@@ -3587,7 +3619,7 @@ function TierBadge({ tier, rank, compact }) {
 }
 
 // ─── Admin Entries View ───────────────────────────────────────────────────────
-function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}, isAdmin = false, nationalityMap = {}, tournamentOdds = {}, tierOverrides = {}, paidMap = {}, onTogglePaid, playerNames = {} }) {
+function AdminEntriesView({ entries, players, cutScore, cutFinalized, tournament, rankMap = {}, isAdmin = false, nationalityMap = {}, tournamentOdds = {}, tierOverrides = {}, paidMap = {}, onTogglePaid, playerNames = {} }) {
   const [sortCol, setSortCol] = useState('savedAt');
   const [sortDir, setSortDir] = useState('desc');
   const [confirmUnpaidUid, setConfirmUnpaidUid] = useState(null);
@@ -3658,11 +3690,12 @@ function AdminEntriesView({ entries, players, cutScore, tournament, rankMap = {}
   }
 
   // Compute scores and tier sums for each entry
+  const worstQualifyingScore = computeWorstQualifyingScore(players);
   const withScores = entries.map(entry => {
     const picksWithScores = (entry.picks || []).map(pk => {
       const live = players.find(p => p.id === pk.id);
       if (!live) return { ...pk, display: "–", adjusted: 0, found: false };
-      const { adjusted, actualScore, fantasyScore, penalised } = applyScoreRules(live, cutScore);
+      const { adjusted, actualScore, fantasyScore, penalised } = applyScoreRules(live, cutScore, worstQualifyingScore, cutFinalized);
       const scoreCell = formatScoreCell(actualScore, fantasyScore, penalised);
       const displayVal = scoreCell.fantasy ?? ((live.cut || live.withdrawn) ? "—" : formatScore(actualScore));
       return { ...pk, display: displayVal, adjusted, found: true };
@@ -4015,6 +4048,8 @@ function CompetitionPage({ user, isAdmin }) {
   const [prevRows, setPrevRows] = useState([]); // for rank movement arrows
   const [players, setPlayers]   = useState([]);
   const [cutScore, setCutScore] = useState(null);
+  const [cutFinalized, setCutFinalized] = useState(false);
+  const [worstQualifyingScore, setWorstQualifyingScore] = useState(null);
   const [loading, setLoading]   = useState(false);
   const [revealed, setRevealed]   = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -4063,8 +4098,11 @@ function CompetitionPage({ user, isAdmin }) {
       if (natData) setNationalityMap(natData);
       setPlayerNames(savedPlayerNames);
       const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+      const wqs = computeWorstQualifyingScore(lp);
       setPlayers(lp);
       setCutScore(eff);
+      setCutFinalized(!!cutHappened);
+      setWorstQualifyingScore(wqs);
       setRevealed(!!revealState?.revealed);
       setPrizePositions(prizePositionsData?.positions ?? null);
       setCompleted(!!completedData?.completed);
@@ -4074,7 +4112,7 @@ function CompetitionPage({ user, isAdmin }) {
         const total = entry.picks.reduce((sum, pk) => {
           const live = lp.find(p => p.id===pk.id);
           if (!live) return sum;
-          return sum + applyScoreRules(live, eff).adjusted;
+          return sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted;
         }, 0);
         return { userId: entry.userId, displayName: savedPlayerNames[entry.userId] || entry.displayName, picks: entry.picks, total };
       });
@@ -4173,10 +4211,19 @@ function CompetitionPage({ user, isAdmin }) {
       {cutScore !== null && (
         <div className="cut-banner" style={{marginBottom:"1.5rem"}}>
           <div className="cut-info">
-            Cut line: <strong>{formatScore(cutScore)}</strong>
-            <span style={{marginLeft:"14px", fontSize:"0.8rem", opacity:0.8}}>
-              MC / WD → {formatScore(cutScore+10)} &nbsp;·&nbsp; Cap → {formatScore(cutScore+9)}
-            </span>
+            {cutFinalized ? "Cut line" : "Projected cut"}: <strong>{formatScore(cutScore)}</strong>
+            {(() => {
+              const penaltyBase = cutFinalized ? worstQualifyingScore : cutScore;
+              return penaltyBase !== null && penaltyBase !== undefined ? (
+                <span style={{marginLeft:"14px", fontSize:"0.8rem", opacity:0.8}}>
+                  MC / WD → {formatScore(penaltyBase+10)} &nbsp;·&nbsp; Cap → {formatScore(penaltyBase+9)}
+                </span>
+              ) : cutFinalized ? (
+                <span style={{marginLeft:"14px", fontSize:"0.8rem", opacity:0.8, fontStyle:"italic"}}>
+                  awaiting confirmed missed-cut scores…
+                </span>
+              ) : null;
+            })()}
           </div>
         </div>
       )}
@@ -4216,7 +4263,7 @@ function CompetitionPage({ user, isAdmin }) {
                   <div style={{fontFamily:"'Crimson Text',serif", fontSize:"0.8rem", color:"var(--text-light)", marginTop:"10px", display:"flex", flexWrap:"wrap", columnGap:"12px", rowGap:"4px"}}>
                     {myRow.picks.map(pk => {
                       const live = players.find(p=>p.id===pk.id);
-                      const rs = applyScoreRules(live, cutScore);
+                      const rs = applyScoreRules(live, cutScore, worstQualifyingScore, cutFinalized);
                       const sc2 = formatScoreCell(rs.actualScore, rs.fantasyScore, rs.penalised);
                       const dotClass = !live ? "dot-grey" : (live.withdrawn||rs.penalised) ? "dot-red" : live.playStatus==="finished"?"dot-blue":live.playStatus==="not_started"||live.playStatus==="cut_wd"?"dot-grey":"dot-green";
                       return (
@@ -4302,7 +4349,7 @@ function CompetitionPage({ user, isAdmin }) {
                         <small style={{display:"flex", flexWrap:"wrap", columnGap:"10px", rowGap:"2px", marginTop:"3px"}}>
                           {row.picks.map(pk => {
                             const live = players.find(p=>p.id===pk.id);
-                            const rs=applyScoreRules(live,cutScore); const sc2=formatScoreCell(rs.actualScore,rs.fantasyScore,rs.penalised);
+                            const rs=applyScoreRules(live,cutScore,worstQualifyingScore,cutFinalized); const sc2=formatScoreCell(rs.actualScore,rs.fantasyScore,rs.penalised);
                             const dotClass = !live ? "dot-grey" : (live.withdrawn||rs.penalised) ? "dot-red" : live.playStatus==="finished"?"dot-blue":live.playStatus==="not_started"||live.playStatus==="cut_wd"?"dot-grey":"dot-green";
                             return (
                               <span key={pk.id} style={{display:"inline-flex", alignItems:"center", whiteSpace:"nowrap"}}>
@@ -4367,6 +4414,7 @@ function PlayersDirectory() {
         ]);
         if (!revealState?.revealed) return;
         const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+        const wqs = computeWorstQualifyingScore(lp);
         const entries = Object.values(allPicksRaw);
         if (entries.length === 0) return;
 
@@ -4375,7 +4423,7 @@ function PlayersDirectory() {
           displayName: playerNames[entry.userId] || entry.displayName,
           total:       entry.picks.reduce((sum, pk) => {
             const live = lp.find(p => p.id === pk.id);
-            return live ? sum + applyScoreRules(live, eff).adjusted : sum;
+            return live ? sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted : sum;
           }, 0),
         })).sort((a, b) => a.total - b.total);
 
@@ -4547,6 +4595,7 @@ function SeasonStandings({ user }) {
           store.get(`cut__${ev.id}`),
         ]);
         const eff     = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+        const wqs     = computeWorstQualifyingScore(lp);
         const entries = Object.values(allPicksRaw);
         if (entries.length === 0) return { id: ev.id, name: ev.name, status, entrants: 0 };
 
@@ -4555,7 +4604,7 @@ function SeasonStandings({ user }) {
           displayName: playerNames[entry.userId] || entry.displayName,
           total:       entry.picks.reduce((sum, pk) => {
             const live = lp.find(p => p.id === pk.id);
-            return live ? sum + applyScoreRules(live, eff).adjusted : sum;
+            return live ? sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted : sum;
           }, 0),
         })).sort((a, b) => a.total - b.total);
 
@@ -4717,17 +4766,18 @@ function MyResultsPage({ user }) {
 
         const { players: lp, espnCutScore, cutHappened } = await fetchLeaderboard(ev.id, ev.date);
         const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+        const wqs = computeWorstQualifyingScore(lp);
 
         const myTotal = myPicksRaw.reduce((sum, pk) => {
           const live = lp.find(p => p.id === pk.id);
           if (!live) return sum;
-          return sum + applyScoreRules(live, eff).adjusted;
+          return sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted;
         }, 0);
 
         const myPicksWithScores = myPicksRaw.map(pk => {
           const live = lp.find(p => p.id === pk.id);
           if (!live) return { ...pk, display: "–" };
-          const { actualScore, fantasyScore, penalised } = applyScoreRules(live, eff);
+          const { actualScore, fantasyScore, penalised } = applyScoreRules(live, eff, wqs, !!cutHappened);
           const cell = formatScoreCell(actualScore, fantasyScore, penalised);
           return { ...pk, display: cell.fantasy ?? formatScore(actualScore), penalised };
         });
@@ -4739,7 +4789,7 @@ function MyResultsPage({ user }) {
           total: entry.picks.reduce((sum, pk) => {
             const live = lp.find(p => p.id === pk.id);
             if (!live) return sum;
-            return sum + applyScoreRules(live, eff).adjusted;
+            return sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted;
           }, 0),
         })).sort((a,b) => a.total - b.total);
 
@@ -5220,11 +5270,12 @@ function ParticipantDashboard() {
           store.get(`cut__${ev.id}`),
         ]);
         const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+        const wqs = computeWorstQualifyingScore(lp);
         const standings = row.entrants.map(entry => ({
           uid: entry.userId, displayName: entry.displayName,
           total: entry.picks.reduce((sum, pk) => {
             const live = lp.find(p => p.id === pk.id);
-            return live ? sum + applyScoreRules(live, eff).adjusted : sum;
+            return live ? sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted : sum;
           }, 0),
         })).sort((a, b) => a.total - b.total);
 
@@ -6047,6 +6098,7 @@ function HistoricalArchive() {
 
         const { players: lp, espnCutScore, cutHappened } = await fetchLeaderboard(ev.id, ev.date);
         const eff = resolveCutScore({ savedCut, espnCutScore, cutHappened });
+        const wqs = computeWorstQualifyingScore(lp);
 
         const standings = entrants.map(entry => ({
           uid:         entry.userId,
@@ -6055,7 +6107,7 @@ function HistoricalArchive() {
           total:       entry.picks.reduce((sum, pk) => {
             const live = lp.find(p => p.id === pk.id);
             if (!live) return sum;
-            return sum + applyScoreRules(live, eff).adjusted;
+            return sum + applyScoreRules(live, eff, wqs, !!cutHappened).adjusted;
           }, 0),
         })).sort((a,b) => a.total - b.total);
 
