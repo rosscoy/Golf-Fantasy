@@ -2502,7 +2502,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
     const live = displayPlayers.find(p => p.id===pk.id);
     // Use tier from displayPlayers (which already factors in odds + overrides); fall back to world rank
     const tier = live?.tier ?? getTierForRank(rankMap[pk.id] || null);
-    return { ...pk, adjusted: live?.adjusted ?? 0, actualScore: live?.actualScore ?? 0, scoreCell: live?.scoreCell ?? null, cut: live?.cut, withdrawn: live?.withdrawn, tier };
+    return { ...pk, adjusted: live?.adjusted ?? 0, actualScore: live?.actualScore ?? 0, scoreCell: live?.scoreCell ?? null, cut: live?.cut, withdrawn: live?.withdrawn, tier, thru: live?.thru, playStatus: live?.playStatus };
   });
   const totalScore = pickedPlayers.reduce((s,p) => s + p.adjusted, 0);
   const tierSum    = pickedPlayers.reduce((s,p) => s + p.tier, 0);
@@ -3225,12 +3225,13 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                               { col:"pos",     label: players.length === 0 && prefield.length > 0 ? "Odds" : "#", style:{textAlign:"center"} },
                               { col:"name",    label:"Player",  style:{} },
                               { col:"tier",    label:"Tier", style:{textAlign:"center", width:"1px", whiteSpace:"nowrap"} },
+                              { col:"thru",    label:"Thru", style:{textAlign:"center", width:"1px", whiteSpace:"nowrap"}, sortable:false },
                               { col:"score",   label:"Actual",  style:{textAlign:"right"}, className:"col-score" },
                               { col:"fantasy", label:<>Score <Tip text="Fantasy score for the sweep. MC/WD players score cut+10. All others are capped at cut+9. Shown with * when cut has been applied." /></>, style:{textAlign:"center", color:"var(--gold)"} },
-                            ].map(({ col, label, style, className: extraClass }) => (
-                              <th key={col} className={`sortable${sortCol===col?" sort-active":""}${extraClass?" "+extraClass:""}`} style={style}
-                                onClick={() => handleSort(col)}>
-                                {label}<span className="sort-icon">{sortCol===col ? (sortDir==="asc"?"▲":"▼") : "▲"}</span>
+                            ].map(({ col, label, style, className: extraClass, sortable }) => (
+                              <th key={col} className={`${sortable===false?"":"sortable"}${sortCol===col?" sort-active":""}${extraClass?" "+extraClass:""}`} style={style}
+                                onClick={sortable===false ? undefined : () => handleSort(col)}>
+                                {label}{sortable!==false && <span className="sort-icon">{sortCol===col ? (sortDir==="asc"?"▲":"▼") : "▲"}</span>}
                               </th>
                             ))}
                             <th></th>
@@ -3253,6 +3254,9 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                                 </td>
                                 <td style={{textAlign:"center", width:"1px", whiteSpace:"nowrap"}}>
                                   <TierBadge tier={p.tier} rank={p.rank} />
+                                </td>
+                                <td style={{textAlign:"center", width:"1px", whiteSpace:"nowrap", fontSize:"0.82rem", color: p.playStatus==="active" ? "#4caf50" : "var(--text-light)", fontWeight: p.playStatus==="active" ? 700 : 400}}>
+                                  {p.isPrefield ? "" : (p.playStatus==="active" ? p.thru : p.playStatus==="finished" ? "F" : "")}
                                 </td>
                                 <td className="col-score" style={{textAlign:"right", fontSize:"0.88rem"}}>
                                   {p.isPrefield
@@ -3320,7 +3324,13 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                                 <TierBadge tier={p.tier} compact />
                                 <div className="t-slot-name">{p.name}</div>
                               </div>
-                              {(p.cut||p.withdrawn) && <div className="t-slot-tag">{p.cut?"Missed cut":"Withdrawn"}</div>}
+                              {(p.cut||p.withdrawn)
+                                ? <div className="t-slot-tag">{p.cut?"Missed cut":"Withdrawn"}</div>
+                                : p.playStatus==="active" && p.thru && p.thru !== "-"
+                                  ? <div className="t-slot-tag" style={{color:"#4caf50"}}>Thru {p.thru}</div>
+                                  : p.playStatus==="finished"
+                                    ? <div className="t-slot-tag">Round complete</div>
+                                    : null}
                             </div>
                             <div style={{display:"flex", alignItems:"center", gap:"6px"}}>
                               {p.scoreCell?.fantasy != null ? (
