@@ -899,6 +899,22 @@ function computeWorstQualifyingScore(players) {
   return worst;
 }
 
+// Preview version of computeWorstQualifyingScore, used for the "Projected cut" banner
+// before the cut is official: anchors to the best real score among players CURRENTLY
+// projected to miss (rawScore/actualScore over the projected line), rather than to the
+// cut line itself, so the preview reflects the same real-score logic as the final formula.
+function computeProjectedWorstQualifyingScore(players, cutScore) {
+  if (cutScore === null || cutScore === undefined) return null;
+  let worst = null;
+  for (const p of players) {
+    if (p.isPrefield || p.withdrawn || p.cut) continue;
+    const score = typeof p.actualScore === "number" ? p.actualScore : p.rawScore;
+    if (typeof score !== "number" || score <= cutScore) continue;
+    if (worst === null || score < worst) worst = score;
+  }
+  return worst;
+}
+
 function applyScoreRules(player, cutScore, worstQualifyingScore, cutFinalized) {
   // Nothing is capped or penalised until the cut is official (Round 3 under way) and
   // at least one player has actually missed it — a projected cut score during Rounds
@@ -2593,6 +2609,11 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
     return { ...p, adjusted, actualScore, fantasyScore, penalised, scoreCell: cell, rank, oddsPos, tier, baseTier };
   }) : prefieldActivePlayers;
 
+  // Pre-finalized preview of the same real-score anchor used once the cut is official —
+  // lets the banner show up-to-date MC/WD & cap numbers during Rounds 1-2 without
+  // actually applying any capping/penalty yet (that still only happens once cutFinalized).
+  const projectedWorstQualifyingScore = !cutFinalized ? computeProjectedWorstQualifyingScore(displayPlayers, cutScore) : null;
+
   const filtered      = displayPlayers.filter(p => !search || p.name.toLowerCase().includes(search.toLowerCase()));
 
   const parsePos = pos => {
@@ -3229,7 +3250,7 @@ function TournamentPage({ user, isAdmin, tournament, onBack }) {
                   </span>
                 )}
                 {(() => {
-                  const penaltyBase = cutFinalized ? worstQualifyingScore : cutScore;
+                  const penaltyBase = cutFinalized ? worstQualifyingScore : (projectedWorstQualifyingScore ?? cutScore);
                   return penaltyBase !== null && penaltyBase !== undefined ? (
                     <span style={{marginLeft:"14px", fontSize:"0.8rem", opacity:0.8}}>
                       MC / WD → {formatScore(penaltyBase+10)} · Cap for qualifiers → {formatScore(penaltyBase+9)}
@@ -4213,7 +4234,7 @@ function CompetitionPage({ user, isAdmin }) {
           <div className="cut-info">
             {cutFinalized ? "Cut line" : "Projected cut"}: <strong>{formatScore(cutScore)}</strong>
             {(() => {
-              const penaltyBase = cutFinalized ? worstQualifyingScore : cutScore;
+              const penaltyBase = cutFinalized ? worstQualifyingScore : (computeProjectedWorstQualifyingScore(players, cutScore) ?? cutScore);
               return penaltyBase !== null && penaltyBase !== undefined ? (
                 <span style={{marginLeft:"14px", fontSize:"0.8rem", opacity:0.8}}>
                   MC / WD → {formatScore(penaltyBase+10)} &nbsp;·&nbsp; Cap → {formatScore(penaltyBase+9)}
