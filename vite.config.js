@@ -9,6 +9,10 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      // RC Golf Sweeps has moved to https://rcsportshq.vercel.app/golf. This makes the
+      // generated service worker clear its caches and unregister itself, so installed
+      // copies stop serving the old app and follow the redirect in vercel.json.
+      selfDestroying: true,
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png', 'icon.svg'],
       manifest: {
